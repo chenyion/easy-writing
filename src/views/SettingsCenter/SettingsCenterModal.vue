@@ -656,7 +656,9 @@ const restoreDefaults = async () => {
       border-top: 1px solid color-mix(in srgb, var(--ui-border) 70%, transparent);
     }
 
-    span {
+    // 只管行首那个文字 span：写成后代选择器会连 el-switch 内部的轨道 span 一起改掉，
+    // 轨道被压成 0 宽、圆钮甩到轨道外（GitHub #1 的"开关超出边界"）
+    > span {
       min-width: 0;
       display: flex;
       flex-direction: column;

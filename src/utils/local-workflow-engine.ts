@@ -7,7 +7,7 @@ import {
   buildOutlineAdjustMessages,
   buildSettingAdjustMessages,
 } from '@/config/workflow-prompts'
-import { NO_MODEL_MESSAGE, requestLocalChatCompletion } from '@/utils/local-ai-client'
+import { LONG_COMPLETION_TIMEOUT_MS, NO_MODEL_MESSAGE, requestLocalChatCompletion } from '@/utils/local-ai-client'
 import { promptText } from '@/storage/local-prompts'
 import { createLocalEntityId, nowIso } from '@/storage/local-library-utils'
 import {
@@ -36,6 +36,14 @@ type LocalGenerateStep = 'inspiration' | 'outline' | 'setting'
 type LocalAdjustStep = 'outline_adjust' | 'setting_adjust'
 
 const asText = (value: unknown) => String(value ?? '').trim()
+
+/** 结构化结果解析失败的统一文案：带上模型返回的开头，用户一眼能看出是空、是截断还是答非所问 */
+const describeUnparsableResult = (what: string, raw: string) => {
+  const head = String(raw || '').trim().replace(/\s+/g, ' ').slice(0, 80)
+  return head
+    ? `${what}生成结果无法解析（输出被截断或格式不对），请重新生成或换个模型。模型返回开头：「${head}…」`
+    : `${what}生成结果为空，请重新生成或换个模型`
+}
 
 const resolveWorkflowModel = async (run: { modelCode?: string; config?: JsonRecord | null }) => {
   const aiModelStore = useAiModelStore()
@@ -100,7 +108,6 @@ const generateStepContent = async (
         },
         shape: promptText('workflow-wizard', 'ideaShape'),
       }),
-      maxTokens: 600,
     })
     let parsed: { ideaText?: unknown } | null = null
     try {
@@ -120,6 +127,7 @@ const generateStepContent = async (
       sceneLabel: '建书·大纲',
       modelCode,
       signal,
+      timeoutMs: LONG_COMPLETION_TIMEOUT_MS,
       messages: buildStructuredJsonMessages({
         task: promptText('workflow-wizard', 'outlineTask'),
         materials: {
@@ -128,11 +136,15 @@ const generateStepContent = async (
         },
         shape: promptText('workflow-wizard', 'outlineShape'),
       }),
-      maxTokens: 8000,
     })
-    const parsed = parseAiJson(data, ['titleOptions', 'volumes', 'chapters'])
+    let parsed: JsonRecord | null = null
+    try {
+      parsed = parseAiJson(data, ['titleOptions', 'volumes', 'chapters'])
+    } catch {
+      throw new Error(describeUnparsableResult('大纲', data))
+    }
     if (!parsed || (!Array.isArray(parsed.chapters) && !Array.isArray(parsed.volumes))) {
-      throw new Error('大纲生成结果无法解析（输出被截断或格式不对），请重新生成或换个模型')
+      throw new Error(describeUnparsableResult('大纲', data))
     }
     return parsed
   }
@@ -152,6 +164,7 @@ const generateStepContent = async (
     sceneLabel: '建书·设定',
     modelCode,
     signal,
+    timeoutMs: LONG_COMPLETION_TIMEOUT_MS,
     messages: buildStructuredJsonMessages({
       task: promptText('workflow-wizard', 'settingTask'),
       materials: {
@@ -160,11 +173,15 @@ const generateStepContent = async (
       },
       shape: promptText('workflow-wizard', 'settingShape'),
     }),
-    maxTokens: 8000,
   })
-  const parsed = parseAiJson(data, ['worldCards', 'characters'])
+  let parsed: JsonRecord | null = null
+  try {
+    parsed = parseAiJson(data, ['worldCards', 'characters'])
+  } catch {
+    throw new Error(describeUnparsableResult('设定', data))
+  }
   if (!parsed || (!Array.isArray(parsed.characters) && !Array.isArray(parsed.worldCards))) {
-    throw new Error('设定生成结果无法解析（输出被截断或格式不对），请重新生成或换个模型')
+    throw new Error(describeUnparsableResult('设定', data))
   }
   return parsed
 }
@@ -300,7 +317,6 @@ const runAdjustStep = async (
     sceneLabel: '建书·按要求调整',
     modelCode,
     signal,
-    maxTokens: 8000,
     messages: builder({
       materials,
       scopeLabel,

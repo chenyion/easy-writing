@@ -1,5 +1,5 @@
 import type { AiModelGroupCode, AiModelOption } from '@/types/ai-model'
-import type { UserAiModelSavePayload } from '@/types/user-ai-model'
+import type { AiThinkingMode, UserAiModelSavePayload } from '@/types/user-ai-model'
 import { createLocalEntityId, nowIso } from './local-library-utils'
 
 /**
@@ -25,6 +25,10 @@ export interface LocalAiModel {
   status: number
   sort: number
   createTime: string
+  /** 思考模式，老数据缺省视为跟随默认 */
+  thinking?: AiThinkingMode
+  /** 额外请求参数 JSON 文本 */
+  extraParams?: string
 }
 
 interface LocalAiModelStore {
@@ -60,6 +64,12 @@ const saveStore = (store: LocalAiModelStore) => {
   }
 }
 
+/** 老数据没有 thinking 字段时按供应商给默认：能用参数关思考的供应商默认关，与模型管理的预设一致。
+ *  否则升级后老配置会变成"跟随默认"，DeepSeek 这类默认开思考的模型又会把老的 8192 上限吃光 */
+const PROVIDERS_DEFAULT_THINKING_OFF = new Set(['deepseek', 'aliyun', 'bigmodel', 'volcengine', 'siliconflow', 'local'])
+export const defaultThinkingFor = (provider: string | undefined): AiThinkingMode =>
+  PROVIDERS_DEFAULT_THINKING_OFF.has(String(provider || '').trim()) ? 'off' : 'default'
+
 /** 模型的对外唯一码：列表/偏好/请求层都用它指认模型 */
 export const localAiModelCode = (id: number) => String(id)
 
@@ -77,6 +87,8 @@ const toOption = (model: LocalAiModel): AiModelOption => ({
   isMine: true,
   maxContext: model.maxContext,
   maxOutputTokens: model.maxOutputTokens,
+  thinking: model.thinking || defaultThinkingFor(model.provider),
+  extraParams: model.extraParams || '',
   status: model.status,
 })
 
@@ -104,6 +116,8 @@ export const saveLocalAiModel = async (payload: UserAiModelSavePayload) => {
     if (String(payload.apiKey || '').trim()) model.apiKey = String(payload.apiKey).trim()
     model.maxContext = payload.maxContext
     model.maxOutputTokens = payload.maxOutputTokens
+    if (payload.thinking) model.thinking = payload.thinking
+    if (payload.extraParams !== undefined) model.extraParams = String(payload.extraParams || '').trim()
     model.status = payload.status
     if (payload.sort != null) model.sort = payload.sort
     saveStore(store)
@@ -123,6 +137,8 @@ export const saveLocalAiModel = async (payload: UserAiModelSavePayload) => {
     status: payload.status,
     sort: payload.sort ?? store.models.length + 1,
     createTime: nowIso(),
+    thinking: payload.thinking || defaultThinkingFor(payload.provider),
+    extraParams: String(payload.extraParams || '').trim(),
   }
   store.models.push(model)
   saveStore(store)
@@ -152,7 +168,8 @@ export const deleteLocalAiModel = async (id: number) => {
 /** 请求层取完整配置（含明文密钥）；code 即 localAiModelCode */
 export const getLocalAiModelSecret = (code: string): LocalAiModel | null => {
   const store = loadStore()
-  return store.models.find(model => localAiModelCode(model.id) === String(code)) || null
+  const model = store.models.find(item => localAiModelCode(item.id) === String(code))
+  return model ? { ...model, thinking: model.thinking || defaultThinkingFor(model.provider) } : null
 }
 
 // ---------------------------------------------------------------------------

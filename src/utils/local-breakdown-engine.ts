@@ -118,7 +118,6 @@ const analyzeOneChapter = async (project: LocalBreakdownProject, chapterId: numb
     sceneLabel: '拆书·单章拆解',
     modelCode,
     temperature: promptTemperature('breakdown', 'system'),
-    maxTokens: 4000,
     messages: buildChapterBreakdownMessages({
       bookTitle: project.title,
       chapterTitle: item.title,
@@ -235,7 +234,6 @@ export const generateLocalBreakdownReport = async (data: { projectId: number }) 
     scene: 'breakdown_report',
     sceneLabel: '拆书·全书报告',
     modelCode,
-    maxTokens: 6000,
     messages: buildBookReportMessages({ bookTitle: project.title, chapterBriefs: briefs }),
   })
   let parsed: JsonRecord | null = null

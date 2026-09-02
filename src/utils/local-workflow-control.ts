@@ -267,7 +267,6 @@ export const reviewLocalWorkflowTask = async (data: {
       scene: 'workflow_plot_adjust',
       sceneLabel: '建书·剧情调整',
       modelCode,
-      maxTokens: 800,
       messages: buildPlotOutlineMessages({
         materials: {
           '本章原章纲': `《${review.chapterTitle}》`,
@@ -470,7 +469,6 @@ export const rewriteLocalWorkflowChapter = async (data: {
       scene: 'workflow_plot_adjust',
       sceneLabel: '建书·剧情调整',
       modelCode,
-      maxTokens: 800,
       messages: buildPlotOutlineMessages({
         materials: {
           '本章原章纲': `第${chapter.sortNo}章《${chapter.title}》：${asText(chapter.summary)}`,
@@ -584,7 +582,6 @@ export const polishLocalWorkflowParagraph = async (data: {
     scene: 'workflow_paragraph_polish',
     sceneLabel: '建书·段落润色',
     modelCode,
-    maxTokens: 1200,
     messages: buildParagraphPolishMessages({
       materials: {
         '指出的问题': issue ? `${issue.message}${issue.fix ? `；修改建议：${issue.fix}` : ''}` : issueMessage,

@@ -644,7 +644,6 @@ const handlePromptPolish = async () => {
       scene: 'cover_prompt_polish',
       sceneLabel: '封面描述润色',
       modelCode,
-      maxTokens: 500,
       messages: buildCoverPromptEnhanceMessages({
         prompt,
         style: imageForm.style || '自动匹配',

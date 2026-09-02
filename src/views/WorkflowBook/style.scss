@@ -758,14 +758,13 @@
 
 
 
-/* 预览浮层脱离文档流，避免 AI 结果撑开或挤压右侧布局。 */
+/* 预览区放在辅助按钮下方、随内容撑高。
+   以前是绝对定位浮层、max-height 按面板高度算；面板改成按内容高度排布后只有两排按钮那么高，
+   浮层被压得只剩标题条：正文（滚动容器）被挤成 0 高，按钮溢出后被侧栏裁掉。
+   正文自身 168px 封顶可滚动，面板变高不影响左侧（body 是 align-items: start）。 */
 .idea-preview-popover {
-  position: absolute;
-  top: 64px;
-  right: 16px;
-  left: 16px;
-  z-index: 8;
-  max-height: calc(100% - 84px);
+  position: relative;
+  margin-top: 12px;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -871,9 +870,9 @@
   overflow: hidden;
 }
 
-.base-config-panel,
-
 .base-config-panel {
+  // 与其他步骤面板同一口径的内边距（之前一次清理把带 padding 的规则块删了，只剩个悬空选择器）
+  padding: 20px 22px;
   min-height: 0;
   overflow-y: auto;
 }

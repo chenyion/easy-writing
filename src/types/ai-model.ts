@@ -1,3 +1,4 @@
+import type { AiThinkingMode } from '@/types/user-ai-model'
 
 export type AiModelGroupCode = 'text_assist' | 'workflow_book' | 'image_generation'
 
@@ -16,6 +17,8 @@ export interface AiModelOption {
   isDefault?: boolean
   maxContext?: number
   maxOutputTokens?: number
+  thinking?: AiThinkingMode
+  extraParams?: string
   status?: number
   testStatus?: number
   lastTestAt?: string

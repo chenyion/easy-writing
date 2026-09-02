@@ -5,6 +5,9 @@ import { ElLoading } from 'element-plus'
 // 组件与样式由 unplugin 按需注入；这三类是脚本里程序化调用的，样式手动带上
 import 'element-plus/es/components/message/style/index'
 import 'element-plus/es/components/message-box/style/index'
+// ElNotification 在 App.vue 里是显式 import，不经 unplugin 按需注入，样式得手动引；
+// 漏了它，更新提醒会渲染成页尾一个无定位的裸 div，用户根本看不见
+import 'element-plus/es/components/notification/style/index'
 import 'element-plus/es/components/loading/style/index'
 import '@fortawesome/fontawesome-free/css/all.min.css'
 import '@/styles/common.scss'

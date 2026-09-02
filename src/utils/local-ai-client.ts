@@ -1,4 +1,5 @@
 import type {
+  AiThinkingMode,
   UserAiModelSavePayload,
   UserAiModelTestResult,
   UserAiRemoteModelListResult,
@@ -35,9 +36,55 @@ const resolveAiFetch = async (): Promise<FetchLike> => {
   return window.fetch.bind(window)
 }
 
-/** 阿里 dashscope 接口：思考型千问模型走非流式必须显式关思考，否则服务端直接 400
- *（官方要求 enable_thinking=false 或改用流式；按 baseUrl 判断，自定义填法也能盖住） */
-const isDashScope = (baseUrl: string) => String(baseUrl || '').includes('aliyuncs.com')
+/** 供应商代码来自模型管理的预设；自定义/未知时按地址猜官方渠道，老配置也能命中翻译表 */
+const inferProvider = (provider: string | undefined, baseUrl: string): string => {
+  const code = String(provider || '').trim()
+  if (code && code !== 'custom') return code
+  const url = String(baseUrl || '')
+  if (url.includes('api.deepseek.com')) return 'deepseek'
+  if (url.includes('aliyuncs.com')) return 'aliyun'
+  if (url.includes('siliconflow')) return 'siliconflow'
+  if (url.includes('bigmodel.cn')) return 'bigmodel'
+  if (url.includes('volces.com')) return 'volcengine'
+  if (url.includes('openrouter.ai')) return 'openrouter'
+  if (url.includes('googleapis.com')) return 'gemini_openai'
+  return code
+}
+
+/**
+ * 思考开关翻译表：模型管理里"思考模式"选关闭/开启时，按供应商发它自己的参数。
+ * 行业没有统一字段，各家不同（Cherry Studio、LiteLLM 等也都维护这么一张表）：
+ * - DeepSeek / 智谱 / 火山方舟：thinking.type
+ * - 千问百炼 / 硅基流动：enable_thinking
+ * - OpenRouter：reasoning.enabled
+ * - Gemini 兼容 / Ollama 兼容：reasoning_effort=none 只能关，开启走各自默认
+ * 表里没有的供应商（OpenAI、xAI、MiniMax、Claude、自定义）不下发任何字段，用户在"额外请求参数"里自填。
+ * 思考型模型的思考 token 多半计入 max_tokens（真 Key 实测 DeepSeek v4-pro 建书大纲思考吃掉 6092），
+ * 所以"开启"必须配合模型配置里足够大的最大输出 Tokens。
+ */
+type ThinkingParamBuilder = (on: boolean) => Record<string, unknown> | null
+const THINKING_PARAMS: Record<string, ThinkingParamBuilder | undefined> = {
+  deepseek: on => ({ thinking: { type: on ? 'enabled' : 'disabled' } }),
+  bigmodel: on => ({ thinking: { type: on ? 'enabled' : 'disabled' } }),
+  volcengine: on => ({ thinking: { type: on ? 'enabled' : 'disabled' } }),
+  aliyun: on => ({ enable_thinking: on }),
+  siliconflow: on => ({ enable_thinking: on }),
+  openrouter: on => ({ reasoning: { enabled: on } }),
+  gemini_openai: on => (on ? null : { reasoning_effort: 'none' }),
+  local: on => (on ? null : { reasoning_effort: 'none' }),
+}
+
+/** 模型的"额外请求参数"是 JSON 对象文本；坏 JSON 在界面保存时就拦下，这里只做兜底 */
+export const parseExtraParams = (text: string | undefined): Record<string, unknown> | undefined => {
+  const raw = String(text || '').trim()
+  if (!raw) return undefined
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : undefined
+  } catch {
+    return undefined
+  }
+}
 
 // OpenAI 官方接口的两个换代差异（其余兼容渠道仍认老字段）：
 // token 上限字段改名 max_completion_tokens；推理系（o*/gpt-5*）只认默认温度
@@ -49,7 +96,7 @@ const isOpenAiReasoningModel = (modelCode: string) => /^(o\d|gpt-5)/i.test(Strin
 // 上限只是护栏，普通模型不会因此多产出
 const NON_STREAM_MIN_TOKENS = 2048
 
-/** 按供应商差异拼 chat/completions 请求体：三家怪癖集中在这一处 */
+/** 按供应商差异拼 chat/completions 请求体：各家怪癖集中在这一处 */
 export const buildChatBody = (params: {
   baseUrl: string
   modelCode: string
@@ -57,6 +104,12 @@ export const buildChatBody = (params: {
   maxTokens?: number
   temperature?: number
   stream: boolean
+  /** 模型管理里的供应商代码；缺省按地址猜 */
+  provider?: string
+  /** 模型管理里的思考模式；缺省=跟随模型默认，不下发任何字段 */
+  thinking?: AiThinkingMode
+  /** 用户自填的额外请求参数，最后合并，可覆盖上面任何字段 */
+  extraBody?: Record<string, unknown>
 }): Record<string, unknown> => {
   const body: Record<string, unknown> = {
     model: params.modelCode,
@@ -75,10 +128,17 @@ export const buildChatBody = (params: {
   if (params.temperature !== undefined && !dropTemperature) {
     body.temperature = params.temperature
   }
-  // 阿里 dashscope：思考型千问走非流式必须显式关思考，否则服务端直接 400
-  if (!params.stream && isDashScope(params.baseUrl)) {
+  const provider = inferProvider(params.provider, params.baseUrl)
+  if (params.thinking === 'off' || params.thinking === 'on') {
+    const build = THINKING_PARAMS[provider]
+    Object.assign(body, build?.(params.thinking === 'on') || {})
+  }
+  // 千问百炼：思考型模型走非流式必须 enable_thinking=false，否则服务端直接 400。
+  // 这是官方限制，与用户选择无关；开启思考只在流式生效
+  if (!params.stream && provider === 'aliyun') {
     body.enable_thinking = false
   }
+  if (params.extraBody) Object.assign(body, params.extraBody)
   return body
 }
 
@@ -101,25 +161,47 @@ const resolveRequestConfig = (payload: Partial<UserAiModelSavePayload>) => {
   let baseUrl = String(payload.baseUrl || '').trim()
   let apiKey = String(payload.apiKey || '').trim()
   let modelCode = String(payload.modelCode || '').trim()
+  let provider = String(payload.provider || '').trim()
+  let thinking: AiThinkingMode | undefined = payload.thinking
+  let extraParams = String(payload.extraParams || '').trim()
   if (payload.id != null && (!apiKey || !baseUrl || !modelCode)) {
     const stored = getLocalAiModelSecret(localAiModelCode(payload.id))
     if (stored) {
       if (!apiKey) apiKey = stored.apiKey || ''
       if (!baseUrl) baseUrl = String(stored.baseUrl || '').trim()
       if (!modelCode) modelCode = String(stored.modelCode || '').trim()
+      if (!provider) provider = String(stored.provider || '').trim()
+      if (!thinking) thinking = stored.thinking
+      if (!extraParams) extraParams = String(stored.extraParams || '').trim()
     }
   }
-  return { baseUrl, apiKey, modelCode }
+  return { baseUrl, apiKey, modelCode, provider, thinking, extraParams }
+}
+
+/** 中止判定：浏览器 fetch 抛 DOMException(AbortError)；tauri-plugin-http 中止时
+ *  JS 侧抛 Error('Request cancelled')、Rust 侧回字符串 'Request canceled'，三种都得认，
+ *  否则桌面端的超时和用户取消会被当成普通失败，界面只看到一句"请求失败" */
+const isAbortError = (error: unknown): boolean => {
+  if (error instanceof DOMException) return error.name === 'AbortError'
+  const text = error instanceof Error ? error.message : typeof error === 'string' ? error : ''
+  return /request cancel+ed/i.test(text)
 }
 
 const readableRequestError = (error: unknown): string => {
-  if (error instanceof DOMException && error.name === 'AbortError') {
+  if (isAbortError(error)) {
     return `请求超时（${REQUEST_TIMEOUT_MS / 1000} 秒无响应）`
   }
   if (error instanceof TypeError) {
     return isTauriRuntime()
       ? '网络请求失败，请检查接口地址与网络'
       : '网络请求失败：可能是接口地址不对，或该供应商不允许网页端直连（浏览器跨域限制），桌面版不受此限制'
+  }
+  // tauri-plugin-http 的失败是 Rust 错误序列化成的字符串（连不上、TLS、地址未放行等），原样带出来
+  if (typeof error === 'string' && error.trim()) {
+    const text = error.trim().slice(0, 200)
+    return /not allowed on the configured scope/i.test(text)
+      ? `桌面端未放行该接口地址，请检查 BaseURL（${text}）`
+      : `网络请求失败：${text}`
   }
   return error instanceof Error ? error.message : '请求失败'
 }
@@ -157,7 +239,7 @@ const withTimeout = async <T>(run: (signal: AbortSignal) => Promise<T>): Promise
 export const testLocalAiModel = async (
   payload: Partial<UserAiModelSavePayload>
 ): Promise<{ data: UserAiModelTestResult }> => {
-  const { baseUrl, apiKey, modelCode } = resolveRequestConfig(payload)
+  const { baseUrl, apiKey, modelCode, provider, thinking, extraParams } = resolveRequestConfig(payload)
   const url = joinAiUrl(baseUrl, 'chat/completions')
   const startedAt = Date.now()
   const result = (ok: boolean, message: string): { data: UserAiModelTestResult } => ({
@@ -177,6 +259,9 @@ export const testLocalAiModel = async (
           buildChatBody({
             baseUrl,
             modelCode,
+            provider,
+            thinking,
+            extraBody: parseExtraParams(extraParams),
             messages: [{ role: 'user', content: '连通性测试，请回复"ok"' }],
             maxTokens: 16,
             stream: false,
@@ -234,6 +319,23 @@ const recordAiCall = (entry: {
 // 非流式生成给足时间：润色/扩写可能一次产出几百字
 const COMPLETION_TIMEOUT_MS = 90_000
 
+/** 非流式拿到空正文时按 finish_reason 说人话：空串交给下游只会炸出 "JSON Parse error: Unexpected EOF" 这种天书 */
+const describeEmptyCompletion = (finishReason: string, hasReasoning: boolean): string => {
+  const byReason: Record<string, string> = {
+    length: '模型把输出上限全用在思考上，没有产出正文：请换非思考模型，或在模型管理调大"最大输出 Tokens"',
+    content_filter: '模型服务判定内容触发了安全过滤，没有返回正文：请调整涉及的内容后重试',
+    insufficient_system_resource: '模型服务当前推理资源不足（服务端主动打断了生成），请稍后重试',
+  }
+  if (byReason[finishReason]) return byReason[finishReason]
+  const tail = [finishReason ? `finish_reason=${finishReason}` : '', hasReasoning ? '只返回了思考内容' : '']
+    .filter(Boolean)
+    .join('，')
+  return `模型没有返回正文${tail ? `（${tail}）` : ''}，请重试或换个模型`
+}
+/** 一次吐几千 token 的非流式长任务（建书大纲/设定/章纲规划）用的上限：
+ *  DeepSeek 非流式写 8000 token 要两三分钟，本地小模型更慢；用户随时可取消，这只是防挂死的护栏 */
+export const LONG_COMPLETION_TIMEOUT_MS = 10 * 60_000
+
 /**
  * 非流式补全：一次性返回全文（划词润色/打字补全这类"拿到结果再落格"的场景）。
  * 失败抛出带可读文案的 Error；外部 signal 中止原样抛 AbortError 由调用方静默。
@@ -245,6 +347,8 @@ export const requestLocalChatCompletion = async (options: {
   /** 采样温度（0-2）：来自提示词库逐场景配置；未传用模型服务默认 */
   temperature?: number
   signal?: AbortSignal
+  /** 整次请求的时间上限，不传按 90 秒；大纲这类一次吐几千 token 的非流式调用要给足 */
+  timeoutMs?: number
 } & LocalAiSceneTag): Promise<string> => {
   const model = getLocalAiModelSecret(options.modelCode)
   if (!model) throw new Error(NO_MODEL_MESSAGE)
@@ -253,13 +357,14 @@ export const requestLocalChatCompletion = async (options: {
   }
   const startedAt = Date.now()
   const recordInput = messagesToText(options.messages)
+  const timeoutMs = options.timeoutMs || COMPLETION_TIMEOUT_MS
 
   const controller = new AbortController()
   let timedOut = false
   const timer = window.setTimeout(() => {
     timedOut = true
     controller.abort()
-  }, COMPLETION_TIMEOUT_MS)
+  }, timeoutMs)
   const onCallerAbort = () => controller.abort()
   if (options.signal) {
     if (options.signal.aborted) controller.abort()
@@ -276,7 +381,11 @@ export const requestLocalChatCompletion = async (options: {
         buildChatBody({
           baseUrl: model.baseUrl,
           modelCode: model.modelCode,
+          provider: model.provider,
+          thinking: model.thinking,
+          extraBody: parseExtraParams(model.extraParams),
           messages: options.messages,
+          // 不传按模型配置的最大输出走：上限是各家各模型自己的数，代码里不写死
           maxTokens: options.maxTokens || model.maxOutputTokens || undefined,
           temperature: options.temperature,
           stream: false,
@@ -286,8 +395,14 @@ export const requestLocalChatCompletion = async (options: {
     if (!response.ok) throw new Error(await readableHttpError(response))
     const body = await response.json()
     if (body?.error?.message) throw new Error(String(body.error.message))
+    const choice = body?.choices?.[0]
     // 剥掉部分渠道内联进 content 的 <think> 思考段，只留真正文
-    const content = stripThinkBlocks(String(body?.choices?.[0]?.message?.content || '')).trim()
+    const content = stripThinkBlocks(String(choice?.message?.content || '')).trim()
+    if (!content) {
+      throw new Error(
+        describeEmptyCompletion(String(choice?.finish_reason || ''), Boolean(String(choice?.message?.reasoning_content || '').trim()))
+      )
+    }
     recordAiCall({
       recordType: 'text',
       tag: options,
@@ -301,12 +416,12 @@ export const requestLocalChatCompletion = async (options: {
     })
     return content
   } catch (error) {
-    const readable =
-      error instanceof DOMException && error.name === 'AbortError'
-        ? timedOut
-          ? new Error(`生成超时（${COMPLETION_TIMEOUT_MS / 1000} 秒无结果），请重试`)
-          : error
-        : new Error(readableRequestError(error))
+    // 用户主动中止统一整形成 AbortError 抛出（桌面端原始值是字符串），调用方按老约定静默
+    const readable = isAbortError(error)
+      ? timedOut
+        ? new Error(`生成超时（${timeoutMs / 1000} 秒无结果），请重试`)
+        : new DOMException('The operation was aborted.', 'AbortError')
+      : new Error(readableRequestError(error))
     // 用户主动中止不算失败，不落账；其余失败如实记一笔
     if (!(readable instanceof DOMException)) {
       recordAiCall({
@@ -422,6 +537,9 @@ export const streamLocalChatCompletion = async (
         buildChatBody({
           baseUrl: model.baseUrl,
           modelCode: model.modelCode,
+          provider: model.provider,
+          thinking: model.thinking,
+          extraBody: parseExtraParams(model.extraParams),
           messages: options.messages,
           maxTokens: model.maxOutputTokens || undefined,
           temperature: options.temperature,
@@ -491,7 +609,7 @@ export const streamLocalChatCompletion = async (
     recordStream(1)
     callbacks.onDone()
   } catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') {
+    if (isAbortError(error)) {
       if (timedOut) {
         recordStream(0, 'AI 响应超时')
         callbacks.onError('AI 响应超时，请重试')
@@ -651,12 +769,11 @@ export const generateLocalAiImageRequest = async (options: {
       return { remoteUrl: url }
     }
   } catch (error) {
-    const readable =
-      error instanceof DOMException && error.name === 'AbortError'
-        ? timedOut
-          ? new Error(`生图超时（${IMAGE_TIMEOUT_MS / 1000} 秒无结果），请重试`)
-          : error
-        : new Error(readableRequestError(error))
+    const readable = isAbortError(error)
+      ? timedOut
+        ? new Error(`生图超时（${IMAGE_TIMEOUT_MS / 1000} 秒无结果），请重试`)
+        : new DOMException('The operation was aborted.', 'AbortError')
+      : new Error(readableRequestError(error))
     if (!(readable instanceof DOMException)) recordImage(0, readable.message)
     throw readable
   } finally {

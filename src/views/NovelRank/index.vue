@@ -1068,7 +1068,6 @@ const handleAiReport = async () => {
         changeLines,
         categoryLines,
       }),
-      maxTokens: 600,
     })
     const text = String(report || '').trim()
     if (!text) throw new Error('AI 未返回解读内容')

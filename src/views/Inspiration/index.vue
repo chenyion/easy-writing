@@ -469,7 +469,6 @@ const refreshDailySuggestion = async () => {
         recentTags: [...new Set(recent.map(item => String(item.tag || '').trim()).filter(Boolean))],
         recentContents: recent.map(item => String(item.content || '').slice(0, 60)).filter(Boolean),
       }),
-      maxTokens: 120
     })
     const content = String(spark || '').trim()
     if (!content) throw new Error('AI 暂无灵感返回')

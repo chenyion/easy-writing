@@ -910,7 +910,6 @@ const handleGenerate = async () => {
         categoryLabel: getCategoryLabel(category),
         fields: variables
       }),
-      maxTokens: 400
     })
     const raw = (data || '').trim()
     if (!raw) {

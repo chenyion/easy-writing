@@ -104,7 +104,6 @@ v-if="isFeatureEnabled('writeStatistics')" to="/writeStatistics" class="nav-item
       </router-link>
 
       <button
-        v-if="desktopUpdaterEnabled"
         type="button"
         class="nav-item footer-item ink-nav-item"
         @click="checkForUpdates"
@@ -148,10 +147,8 @@ const currentRoute = computed(() => route.path)
 const appConfigStore = useAppConfigStore()
 const { isFeatureEnabled } = appConfigStore
 const localSettingsVisible = ref(false)
-// 开源版更新源尚未接 GitHub Releases（批 C 发布链），入口先隐藏
-const desktopUpdaterEnabled = false
-
-const checkForUpdates = async () => {
+// 「检查更新」交给 App.vue：桌面端查 GitHub 最新 Release，网页端直接打开下载页
+const checkForUpdates = () => {
   window.dispatchEvent(new CustomEvent('ew-desktop-update-check'))
 }
 

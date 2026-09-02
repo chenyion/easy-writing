@@ -68,7 +68,8 @@ import {
   consumePendingDesktopUpdateNotes,
   type DesktopUpdateSnapshot,
 } from '@/utils/desktop-update'
-import { checkForNewRelease, dismissRelease } from '@/utils/update-check'
+import { checkForNewRelease, checkLatestRelease, dismissRelease, type NewReleaseInfo } from '@/utils/update-check'
+import { GITHUB_RELEASES_URL } from '@/config/opensource'
 import { openLink } from '@/utils/external-link'
 import DesktopTitleBar from '@/components/DesktopTitleBar.vue'
 import GlobalSearchPalette from '@/components/GlobalSearchPalette.vue'
@@ -82,22 +83,56 @@ const desktopUpdaterEnabled = false
 
 // 轻量更新提醒：启动稳定后查一次 GitHub Releases，有新版弹通知点开下载页。
 // 点通知正文=打开下载页；点右上角 × 关闭=这个版本不再提醒。
+const showReleaseNotification = (release: NewReleaseInfo) => {
+  ElNotification({
+    title: `发现新版本 ${release.tag}`,
+    message: release.name ? `${release.name}｜点击查看更新内容并下载` : '点击查看更新内容并下载',
+    type: 'success',
+    duration: 0,
+    onClick: () => {
+      void openLink(release.url, { title: '版本下载' })
+    },
+    onClose: () => dismissRelease(release.tag),
+  })
+}
 const scheduleReleaseNotice = () => {
   if (!desktopShell) return
   window.setTimeout(async () => {
     const release = await checkForNewRelease()
-    if (!release) return
-    ElNotification({
-      title: `发现新版本 ${release.tag}`,
-      message: release.name ? `${release.name}｜点击查看更新内容并下载` : '点击查看更新内容并下载',
-      type: 'success',
-      duration: 0,
-      onClick: () => {
-        void openLink(release.url, { title: '版本下载' })
-      },
-      onClose: () => dismissRelease(release.tag),
-    })
+    if (release) showReleaseNotification(release)
   }, 8000)
+}
+
+// 侧栏「检查更新」：手动触发跳过一天一次的闸门和"已点掉"记录，四种结果都要有回音。
+// 网页端拿不到本机版本号，直接打开下载页让用户自己看。
+let manualReleaseCheckRunning = false
+const runManualReleaseCheck = async () => {
+  if (manualReleaseCheckRunning) return
+  manualReleaseCheckRunning = true
+  const pending = ElMessage({ type: 'info', message: '正在检查更新…', duration: 0 })
+  try {
+    const result = await checkLatestRelease({ force: true })
+    if (result.status === 'new') {
+      showReleaseNotification(result.release)
+    } else if (result.status === 'latest') {
+      ElMessage.success(`已是最新版本 v${result.current}`)
+    } else if (result.status === 'error') {
+      ElNotification({
+        title: '检查更新失败',
+        message: `${result.message}｜点击打开下载页自行查看`,
+        type: 'warning',
+        duration: 8000,
+        onClick: () => {
+          void openLink(GITHUB_RELEASES_URL, { title: '版本下载' })
+        },
+      })
+    } else {
+      void openLink(GITHUB_RELEASES_URL, { title: '版本下载' })
+    }
+  } finally {
+    pending.close()
+    manualReleaseCheckRunning = false
+  }
 }
 const runtimeBodyClass = desktopShell ? 'desktop-runtime' : 'web-runtime'
 
@@ -344,8 +379,7 @@ const showDesktopUpdatePreview = () => {
 }
 
 const handleDesktopUpdateRequest = () => {
-  if (!desktopUpdaterEnabled) return
-  void runDesktopUpdateCheck(false)
+  void runManualReleaseCheck()
 }
 
 const retryDesktopUpdate = () => {

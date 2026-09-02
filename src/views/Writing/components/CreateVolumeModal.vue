@@ -115,7 +115,6 @@ const handleAiName = async () => {
         selection: form.summary || form.title,
         context: `当前分卷名称：${form.title || '未填写'}；分卷简介：${form.summary || '未填写'}`
       }),
-      maxTokens: 80
     })
     const title = normalizeAiTitle(data || '')
     if (!title) throw new Error('AI 暂无可用分卷名称')
@@ -148,7 +147,6 @@ const handleAiPolish = async () => {
         selection: form.summary,
         context: `分卷名称：${form.title || '未填写'}`
       }),
-      maxTokens: 220
     })
     const summary = String(data || '').trim().slice(0, 140)
     if (!summary) throw new Error('AI 暂无可用分卷简介')

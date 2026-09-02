@@ -114,6 +114,8 @@ Stack: Vue 3 + TypeScript + Vite + Pinia + Element Plus + TipTap 3 + Tauri 2.
 
 **How do I migrate to a new computer?** Export any book as JSON (worldbuilding included) and import it on the new machine, or copy the app data directory wholesale.
 
+**Thinking models (DeepSeek V4, Qwen, etc.) fail or are very slow when generating an outline?** Their reasoning eats into the output budget. Every model in Model Management has a "Thinking" setting: "Off" is fastest and most reliable for structured tasks; if you keep it on, raise "Max output tokens" to 32768 or more. Vendors use different switches; the app ships mappings for DeepSeek, Zhipu, Volcengine Ark, Qwen, SiliconFlow, OpenRouter, Gemini and Ollama, and other endpoints can set theirs in "Extra request params".
+
 **A local model (Ollama, LM Studio, etc.) fails with "no access permission" / 403?** Leave the API key empty. If you still get 403, the local server is most likely rejecting the request by its origin. Current desktop builds no longer send an origin with AI requests, so update first; on older builds, set `OLLAMA_ORIGINS=*` and restart Ollama, or add `http://tauri.localhost` and `tauri://localhost` to your server's allowed origins.
 
 ## Disclaimer

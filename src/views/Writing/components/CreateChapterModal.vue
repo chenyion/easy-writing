@@ -89,7 +89,6 @@ const handleAiName = async () => {
         selection: form.summary || form.title || activeVolumeTitle.value,
         context: `所属分卷：${activeVolumeTitle.value || '未指定'}；当前章节名：${form.title || '未填写'}；剧情梗概：${form.summary || '未填写'}`
       }),
-      maxTokens: 80
     })
     const title = normalizeAiText(data || '', 50)
     if (!title) throw new Error('AI 暂无可用章节名称')
@@ -123,7 +122,6 @@ const handleAiOutline = async () => {
         selection: source,
         context: `所属分卷：${activeVolumeTitle.value || '未指定'}；章节名称：${form.title || '未填写'}；预估字数：${form.wordCount}字`
       }),
-      maxTokens: 600
     })
     const outline = String(data || '').trim().slice(0, 500)
     if (!outline) throw new Error('AI 暂无可用细纲')

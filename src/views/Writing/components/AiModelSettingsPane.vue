@@ -124,7 +124,7 @@
             />
           </label>
           <label class="field">
-            <span>最大输出 Tokens</span>
+            <span>最大输出 Tokens<small class="key-local-hint">（各家上限不同，思考型模型建议 32768 以上）</small></span>
             <el-input-number
               v-model="form.maxOutputTokens"
               size="small"
@@ -132,6 +132,24 @@
               :max="form.maxContext"
               :step="512"
               controls-position="right"
+            />
+          </label>
+          <label class="field">
+            <span>思考模式<small class="key-local-hint">{{ thinkingSupportHint }}</small></span>
+            <el-select v-model="form.thinking" size="small" class="ink-select" popper-class="ink-select-popper">
+              <el-option label="关闭（结构化任务更快更稳）" value="off" />
+              <el-option label="跟随模型默认" value="default" />
+              <el-option label="开启（请调大最大输出 Tokens）" value="on" />
+            </el-select>
+          </label>
+          <label class="field wide">
+            <span>额外请求参数<small class="key-local-hint">（JSON 对象，原样合并进请求体；自定义渠道的思考开关可填这里）</small></span>
+            <el-input
+              v-model="form.extraParams"
+              size="small"
+              type="textarea"
+              :rows="2"
+              placeholder='{"chat_template_kwargs":{"enable_thinking":false}}'
             />
           </label>
         </div>
@@ -401,7 +419,7 @@ import {
   listLocalAiRemoteModels as listUserAiRemoteModelsApi,
   testLocalAiModel as testUserAiModelApi,
 } from '@/utils/local-ai-client'
-import type { UserAiModelSavePayload, UserAiModelTestResult } from '@/types/user-ai-model'
+import type { AiThinkingMode, UserAiModelSavePayload, UserAiModelTestResult } from '@/types/user-ai-model'
 import { useAiModelStore } from '@/stores/ai-model'
 
 type ProviderPreset = {
@@ -411,6 +429,11 @@ type ProviderPreset = {
   icon: string
   iconSrc?: string
   description: string
+  /** 该家常见上下文与输出上限的推荐值：输出上限各家各模型不同，超了会 400、不填各家默认又有大有小 */
+  maxContext: number
+  maxOutputTokens: number
+  /** 新建模型时思考模式的默认值：能用参数关思考的供应商默认关，其余跟随模型默认 */
+  thinking: AiThinkingMode
 }
 
 withDefaults(defineProps<{
@@ -422,20 +445,29 @@ withDefaults(defineProps<{
 })
 
 const providerPresets: ProviderPreset[] = [
-  { label: 'OpenAI', provider: 'openai', baseUrl: 'https://api.openai.com/v1', icon: 'AI', iconSrc: '/provider-icons/openai.svg', description: 'OpenAI 兼容接口' },
-  { label: 'DeepSeek', provider: 'deepseek', baseUrl: 'https://api.deepseek.com', icon: 'DS', iconSrc: '/provider-icons/deepseek.ico', description: 'DeepSeek 官方接口' },
-  { label: 'MiniMax', provider: 'minimax', baseUrl: 'https://api.minimaxi.com/v1', icon: 'MM', iconSrc: '/provider-icons/minimax.ico', description: 'MiniMax 官方接口' },
-  { label: '通义千问', provider: 'aliyun', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', icon: 'QW', iconSrc: '/provider-icons/tongyi.svg', description: '阿里百炼兼容接口' },
-  { label: '火山方舟', provider: 'volcengine', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', icon: 'ARK', iconSrc: '/provider-icons/volcengine.png', description: '豆包/方舟兼容接口' },
-  { label: '智谱', provider: 'bigmodel', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', icon: 'GLM', iconSrc: '/provider-icons/bigmodel.png', description: '智谱开放平台' },
-  { label: '硅基流动', provider: 'siliconflow', baseUrl: 'https://api.siliconflow.cn/v1', icon: 'SF', iconSrc: '/provider-icons/siliconflow.ico', description: '多模型聚合接口' },
-  { label: 'OpenRouter', provider: 'openrouter', baseUrl: 'https://openrouter.ai/api/v1', icon: 'OR', iconSrc: '/provider-icons/openrouter.ico', description: '路由聚合接口' },
-  { label: 'Gemini兼容', provider: 'gemini_openai', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', icon: 'G', iconSrc: '/provider-icons/gemini.svg', description: 'Google 兼容接口' },
-  { label: 'Claude', provider: 'claude', baseUrl: 'https://api.anthropic.com/v1', icon: 'C', iconSrc: '/provider-icons/claude.svg', description: 'Anthropic Claude 接口' },
-  { label: 'xAI Grok', provider: 'xai', baseUrl: 'https://api.x.ai/v1', icon: 'X', iconSrc: '/provider-icons/xai.svg', description: 'xAI Grok 接口' },
-  { label: '本地部署', provider: 'local', baseUrl: 'http://127.0.0.1:11434/v1', icon: '家', description: 'Ollama / LM Studio 等本机服务，无需 API Key' },
-  { label: '自定义', provider: 'custom', baseUrl: '', icon: '+', description: '自定义兼容接口' },
+  { label: 'OpenAI', provider: 'openai', baseUrl: 'https://api.openai.com/v1', icon: 'AI', iconSrc: '/provider-icons/openai.svg', description: 'OpenAI 兼容接口', maxContext: 128000, maxOutputTokens: 16384, thinking: 'default' },
+  { label: 'DeepSeek', provider: 'deepseek', baseUrl: 'https://api.deepseek.com', icon: 'DS', iconSrc: '/provider-icons/deepseek.ico', description: 'DeepSeek 官方接口', maxContext: 1000000, maxOutputTokens: 32768, thinking: 'off' },
+  { label: 'MiniMax', provider: 'minimax', baseUrl: 'https://api.minimaxi.com/v1', icon: 'MM', iconSrc: '/provider-icons/minimax.ico', description: 'MiniMax 官方接口', maxContext: 200000, maxOutputTokens: 16384, thinking: 'default' },
+  { label: '通义千问', provider: 'aliyun', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', icon: 'QW', iconSrc: '/provider-icons/tongyi.svg', description: '阿里百炼兼容接口', maxContext: 131072, maxOutputTokens: 16384, thinking: 'off' },
+  { label: '火山方舟', provider: 'volcengine', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', icon: 'ARK', iconSrc: '/provider-icons/volcengine.png', description: '豆包/方舟兼容接口', maxContext: 256000, maxOutputTokens: 32768, thinking: 'off' },
+  { label: '智谱', provider: 'bigmodel', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', icon: 'GLM', iconSrc: '/provider-icons/bigmodel.png', description: '智谱开放平台', maxContext: 200000, maxOutputTokens: 65536, thinking: 'off' },
+  { label: '硅基流动', provider: 'siliconflow', baseUrl: 'https://api.siliconflow.cn/v1', icon: 'SF', iconSrc: '/provider-icons/siliconflow.ico', description: '多模型聚合接口', maxContext: 131072, maxOutputTokens: 16384, thinking: 'off' },
+  { label: 'OpenRouter', provider: 'openrouter', baseUrl: 'https://openrouter.ai/api/v1', icon: 'OR', iconSrc: '/provider-icons/openrouter.ico', description: '路由聚合接口', maxContext: 200000, maxOutputTokens: 32768, thinking: 'default' },
+  { label: 'Gemini兼容', provider: 'gemini_openai', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', icon: 'G', iconSrc: '/provider-icons/gemini.svg', description: 'Google 兼容接口', maxContext: 1000000, maxOutputTokens: 65536, thinking: 'default' },
+  { label: 'Claude', provider: 'claude', baseUrl: 'https://api.anthropic.com/v1', icon: 'C', iconSrc: '/provider-icons/claude.svg', description: 'Anthropic Claude 接口', maxContext: 200000, maxOutputTokens: 16384, thinking: 'default' },
+  { label: 'xAI Grok', provider: 'xai', baseUrl: 'https://api.x.ai/v1', icon: 'X', iconSrc: '/provider-icons/xai.svg', description: 'xAI Grok 接口', maxContext: 131072, maxOutputTokens: 16384, thinking: 'default' },
+  { label: '本地部署', provider: 'local', baseUrl: 'http://127.0.0.1:11434/v1', icon: '家', description: 'Ollama / LM Studio 等本机服务，无需 API Key', maxContext: 32768, maxOutputTokens: 16384, thinking: 'off' },
+  { label: '自定义', provider: 'custom', baseUrl: '', icon: '+', description: '自定义兼容接口', maxContext: 128000, maxOutputTokens: 8192, thinking: 'default' },
 ]
+
+/** 思考模式下拉旁的小字：告诉用户这家能不能用参数开关（表在 local-ai-client 的 THINKING_PARAMS） */
+const thinkingSupportHint = computed(() => {
+  if (['deepseek', 'bigmodel', 'volcengine', 'aliyun', 'siliconflow', 'openrouter'].includes(form.provider)) {
+    return '（此供应商支持开/关）'
+  }
+  if (['gemini_openai', 'local'].includes(form.provider)) return '（此供应商只支持关闭，开启即跟随默认）'
+  return '（此供应商没有通用开关，可在额外请求参数里自填）'
+})
 
 const sceneLabels: Record<string, string> = {
   text: '文字',
@@ -469,6 +501,8 @@ const form = reactive<UserAiModelSavePayload>({
   maxOutputTokens: 8192,
   status: 1,
   sort: 0,
+  thinking: 'default',
+  extraParams: '',
 })
 
 const modelEnabled = computed({
@@ -539,6 +573,9 @@ onBeforeUnmount(() => {
 const applyProvider = (preset: ProviderPreset) => {
   form.provider = preset.provider
   if (preset.baseUrl) form.baseUrl = preset.baseUrl
+  form.maxContext = preset.maxContext
+  form.maxOutputTokens = preset.maxOutputTokens
+  form.thinking = preset.thinking
   testResult.value = null
   clearRemoteModels()
 }
@@ -659,6 +696,8 @@ const editModel = (model: AiModelOption) => {
   form.apiKey = ''
   form.maxContext = Number(model.maxContext || 4096)
   form.maxOutputTokens = Number(model.maxOutputTokens || 8192)
+  form.thinking = model.thinking || 'default'
+  form.extraParams = model.extraParams || ''
   form.status = model.status === 0 ? 0 : 1
   testResult.value = null
   clearRemoteModels()
@@ -708,6 +747,8 @@ const resetForm = () => {
   form.maxOutputTokens = 8192
   form.status = 1
   form.sort = 0
+  form.thinking = 'default'
+  form.extraParams = ''
   testResult.value = null
   clearRemoteModels()
 }
@@ -725,6 +766,8 @@ const buildPayload = (): UserAiModelSavePayload => ({
   maxOutputTokens: Number(form.maxOutputTokens || 8192),
   status: form.status,
   sort: Number(form.sort || 0),
+  thinking: form.thinking || 'default',
+  extraParams: form.extraParams?.trim() || '',
 })
 
 const buildRemoteModelPayload = (): Partial<UserAiModelSavePayload> => ({
@@ -786,6 +829,15 @@ const validateForm = () => {
   ) {
     ElMessage.warning('最大输出 Tokens 必须为 128 到最大上下文之间的整数')
     return false
+  }
+  if (form.extraParams?.trim()) {
+    try {
+      const parsed: unknown = JSON.parse(form.extraParams)
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('not an object')
+    } catch {
+      ElMessage.warning('额外请求参数必须是 JSON 对象，例如 {"enable_thinking": false}')
+      return false
+    }
   }
   // 本地部署（Ollama/LM Studio 等）没有 Key，允许留空
   return true

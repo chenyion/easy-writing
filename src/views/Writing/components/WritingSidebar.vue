@@ -1415,7 +1415,6 @@ const extractChapterOutline = async (chapter: Chapter) => {
       selection: detail?.textContent || chapter.summary || chapter.title,
       context: `章节名：${chapter.title}${chapter.summary ? `；现有章纲：${chapter.summary}` : ''}`
     }),
-    maxTokens: 300
   })
   const summary = String(data || '').trim()
   if (!summary) {

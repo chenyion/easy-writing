@@ -21,6 +21,7 @@ import {
   NO_MODEL_MESSAGE,
   requestLocalChatCompletion,
   streamLocalChatCompletion,
+  LONG_COMPLETION_TIMEOUT_MS,
 } from '@/utils/local-ai-client'
 import { runLocalChapterQualityCheck } from '@/utils/local-quality-check'
 import {
@@ -321,7 +322,7 @@ const planNextChapterBatch = async (
     sceneLabel: '建书·章纲规划',
     modelCode,
     signal,
-    maxTokens: 4000,
+    timeoutMs: LONG_COMPLETION_TIMEOUT_MS,
     messages: buildChapterPlanMessages({
       materials: {
         '写作参数': describeRunConfig(run),
@@ -383,7 +384,6 @@ const ensureChapterBeats = async (
     sceneLabel: '建书·细纲',
     modelCode,
     signal,
-    maxTokens: 1500,
     messages: buildChapterBeatsMessages({
       materials: {
         '写作参数': describeRunConfig(run),

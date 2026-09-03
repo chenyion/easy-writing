@@ -84,26 +84,34 @@
       </div>
     </div>
 
-    <!-- 自爆模式组件 -->
-    <div v-if="!workflowSafetyLocked" class="explosion-layer" ref="explosionLayerRef" :class="{ active: isExploded }">
-      <div ref="flashRef" class="flash-bang"></div>
-    </div>
+    <!-- 自爆模式三层遮罩传送到 body：写作页挂在 MainLayout 的 .app-container（z-index: 10）里，
+         这里的 99999 只在那个层叠上下文内有效，出不去；工具栏弹层（SmartPopover）本来就传送到 body、
+         z-index 2000，会压在遮罩上面。传送出去后三层与弹层同级，按自身 z-index 正常盖住一切。 -->
+    <Teleport to="body">
+      <div v-if="!workflowSafetyLocked" class="explosion-layer" ref="explosionLayerRef" :class="{ active: isExploded }">
+        <div ref="flashRef" class="flash-bang"></div>
+      </div>
+    </Teleport>
 
     <!-- 爆炸后警示文字 -->
-    <div v-if="!workflowSafetyLocked" class="post-blast-msg" v-show="showPostBlastMsg">
-      <span class="msg-text">{{ postBlastMessage }}</span><span class="cursor-blink"></span>
-    </div>
+    <Teleport to="body">
+      <div v-if="!workflowSafetyLocked" class="post-blast-msg" v-show="showPostBlastMsg">
+        <span class="msg-text">{{ postBlastMessage }}</span><span class="cursor-blink"></span>
+      </div>
+    </Teleport>
 
-    <div v-if="!workflowSafetyLocked" class="warning-overlay" :class="{ show: isWarning }">
-      <div class="warning-title">
-        <i class="fa-solid fa-triangle-exclamation"></i>
-        <div>系统即将自毁</div>
+    <Teleport to="body">
+      <div v-if="!workflowSafetyLocked" class="warning-overlay" :class="{ show: isWarning }">
+        <div class="warning-title">
+          <i class="fa-solid fa-triangle-exclamation"></i>
+          <div>系统即将自毁</div>
+        </div>
+        <div class="countdown-text">{{ countdownValue }}</div>
+        <div class="warning-tips">
+          快写点什么！！！
+        </div>
       </div>
-      <div class="countdown-text">{{ countdownValue }}</div>
-      <div class="warning-tips">
-        快写点什么！！！
-      </div>
-    </div>
+    </Teleport>
   </div>
 </template>
 

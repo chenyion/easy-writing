@@ -37,7 +37,7 @@
             <p>当前支持 OpenAI 兼容协议。</p>
           </div>
           <button v-if="editingId" class="ink-btn ink-btn-outline compact-btn" type="button" @click="resetForm">
-            新增
+            取消编辑，改为新增
           </button>
         </div>
 
@@ -489,19 +489,22 @@ const keyword = ref('')
 const statusFilter = ref<'all' | 'enabled' | 'disabled'>('all')
 const testResult = ref<UserAiModelTestResult | null>(null)
 
+/** 新增态的默认供应商：表单初值与重置都从这条预设取，保证与预设卡片一致 */
+const DEFAULT_PRESET = providerPresets[0]
+
 const form = reactive<UserAiModelSavePayload>({
   name: '',
   scene: 'text',
-  provider: 'openai',
+  provider: DEFAULT_PRESET.provider,
   protocol: 'openai_compatible',
   modelCode: '',
-  baseUrl: 'https://api.openai.com/v1',
+  baseUrl: DEFAULT_PRESET.baseUrl,
   apiKey: '',
-  maxContext: 128000,
-  maxOutputTokens: 8192,
+  maxContext: DEFAULT_PRESET.maxContext,
+  maxOutputTokens: DEFAULT_PRESET.maxOutputTokens,
   status: 1,
   sort: 0,
-  thinking: 'default',
+  thinking: DEFAULT_PRESET.thinking,
   extraParams: '',
 })
 
@@ -598,10 +601,13 @@ const saveModel = async () => {
   saving.value = true
   try {
     const payload = buildPayload()
-    const { data } = await saveUserAiModelApi(payload)
-    ElMessage.success(editingId.value ? '模型已更新' : '模型已保存')
-    editingId.value = data?.id || null
-    form.apiKey = ''
+    const wasEditing = Boolean(editingId.value)
+    await saveUserAiModelApi(payload)
+    // 保存即完成：表单回到空白的新增态，不再绑着刚存的那条。
+    // 之前保存后表单仍处于该条的编辑态，用户接着改再点保存，就把上一条悄悄覆盖了。
+    // 要改已保存的模型，从列表点「编辑」显式进入。
+    resetForm()
+    ElMessage.success(wasEditing ? '模型已更新' : '模型已保存，已加入下方列表；表单已清空，可继续添加')
     await refreshModels()
   } catch (error) {
     showApiError(error, '保存模型失败')
@@ -738,16 +744,16 @@ const resetForm = () => {
   editingId.value = null
   form.name = ''
   form.scene = 'text'
-  form.provider = 'openai'
+  form.provider = DEFAULT_PRESET.provider
   form.protocol = 'openai_compatible'
   form.modelCode = ''
-  form.baseUrl = 'https://api.openai.com/v1'
+  form.baseUrl = DEFAULT_PRESET.baseUrl
   form.apiKey = ''
-  form.maxContext = 128000
-  form.maxOutputTokens = 8192
+  form.maxContext = DEFAULT_PRESET.maxContext
+  form.maxOutputTokens = DEFAULT_PRESET.maxOutputTokens
   form.status = 1
   form.sort = 0
-  form.thinking = 'default'
+  form.thinking = DEFAULT_PRESET.thinking
   form.extraParams = ''
   testResult.value = null
   clearRemoteModels()
@@ -797,10 +803,7 @@ const validateRemoteModelFetch = () => {
     ElMessage.warning('最大输出 Tokens 必须为 128 到最大上下文之间的整数')
     return false
   }
-  if (!editingId.value && !form.apiKey?.trim()) {
-    ElMessage.warning('拉取前请填写 API Key')
-    return false
-  }
+  // 本地部署（Ollama/LM Studio 等）没有 Key，允许留空拉取；请求层留空就不带鉴权头
   return true
 }
 

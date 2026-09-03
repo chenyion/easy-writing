@@ -360,7 +360,9 @@
       font-weight: 500;
     }
 
-    .model-select {
+    // 列式布局 align-items: flex-start 下子项不拉伸，模型芯片会按标签文字撑到
+    // 自然宽度、长模型名直接伸出弹层；明确给满宽让内部标题走省略号
+    .model-chip {
       width: 100%;
     }
 

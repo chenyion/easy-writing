@@ -281,6 +281,18 @@ const resolveVolumeWork = async (bookId: string): Promise<VolumeWorkState | null
   return null
 }
 
+/** 整本书还欠多少章：各卷"目标章数-已写章数"与"未写占位章"取大者累加。
+ *  任务停止/完成时写进 task.remainingChapters，写作台据此决定给不给「继续生成」按钮。 */
+export const countRemainingChapters = async (bookId: string) => {
+  const tree = await getLocalLibraryStorage().getLocalBookTree(bookId)
+  let remaining = 0
+  for (const volume of tree) {
+    const pending = volume.children.filter(chapter => chapter.workflowStatus === 'incomplete').length
+    remaining += Math.max(volumeTargetCount(volume) - (volume.children.length - pending), pending)
+  }
+  return remaining
+}
+
 /** 后面各卷还欠多少章（done 事件的 remainingChapters 口径） */
 const countRemainingAfter = async (bookId: string, currentVolumeId: number) => {
   const tree = await getLocalLibraryStorage().getLocalBookTree(bookId)
@@ -554,7 +566,7 @@ export const launchLocalChapterRewrite = (task: WorkflowTask, options: { instruc
       })
       flags.abort = null
       if (flags.cancelRequested) {
-        current = { ...current, status: 'canceled', requestedAction: null, canCancel: false }
+        current = { ...current, status: 'canceled', remainingChapters: await countRemainingChapters(String(current.bookId)), requestedAction: null, canCancel: false }
         await persistTask(current)
         return
       }
@@ -584,7 +596,7 @@ export const launchLocalChapterRewrite = (task: WorkflowTask, options: { instruc
       await persistTask(current)
     } catch (error) {
       if (flags.cancelRequested) {
-        current = { ...current, status: 'canceled', requestedAction: null, canCancel: false }
+        current = { ...current, status: 'canceled', remainingChapters: await countRemainingChapters(String(current.bookId)), requestedAction: null, canCancel: false }
       } else {
         current = {
           ...current,
@@ -666,10 +678,15 @@ const runWriterLoop = async (initial: WorkflowTask, flags: WriterFlags) => {
   const targetWords = resolveChapterTargetWords(run)
 
   const halt = async (status: string, extra: Partial<WorkflowTask> = {}) => {
+    // 停止/完成是终态：把剩余章数记在任务上，写作台才知道要不要给「继续生成」
+    const remainingChapters = ['canceled', 'succeeded'].includes(status)
+      ? await countRemainingChapters(bookId)
+      : task.remainingChapters
     task = {
       ...task,
       ...extra,
       status,
+      remainingChapters,
       requestedAction: null,
       canPause: false,
       canResume: ['paused', 'interrupted', 'failed'].includes(status),

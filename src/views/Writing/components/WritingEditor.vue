@@ -485,10 +485,11 @@
         </button>
         <el-popover
           v-if="!workflowMode"
-          placement="top"
+          placement="top-start"
           :width="280"
           trigger="click"
           popper-class="ai-config-popper"
+          :popper-options="aiConfigPopperOptions"
         >
           <template #reference>
             <button
@@ -1395,6 +1396,11 @@ const toggleFindReplace = () => {
   }
 
   showFindReplace.value = true
+}
+
+// AI 补全设置弹层贴视口边缘时留 12px 空隙（按钮在状态栏最左侧时尤其需要）
+const aiConfigPopperOptions = {
+  modifiers: [{ name: 'preventOverflow', options: { padding: 12 } }],
 }
 
 // Review 状态

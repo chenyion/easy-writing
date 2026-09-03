@@ -30,6 +30,7 @@ import {
   launchLocalChapterRewrite,
   readChapterText,
   resolveWorkflowModelCode,
+  countRemainingChapters,
   saveGeneratedChapterContent,
 } from '@/utils/local-workflow-writer'
 
@@ -192,6 +193,7 @@ export const cancelLocalWorkflowTask = async (data: { taskId: number }) => {
   const next: WorkflowTask = {
     ...task,
     status: 'canceled',
+    remainingChapters: await countRemainingChapters(String(task.bookId)),
     requestedAction: null,
     canPause: false,
     canResume: false,

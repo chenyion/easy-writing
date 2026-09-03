@@ -400,7 +400,8 @@
   }
 }
 
-:global(.ai-config-popper) {
+/* 必须带上 .el-popover：Element 自身规则是 .el-popover.el-popper（两个类），单类压不过 */
+:global(.ai-config-popper.el-popover) {
   background: var(--panel-bg, #111);
   border: 1px solid var(--ui-border, rgba(255, 255, 255, 0.15));
   border-radius: 16px;
@@ -408,7 +409,7 @@
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
 }
 
-:global(.ai-config-popper .el-popper__arrow::before) {
+:global(.ai-config-popper.el-popover .el-popper__arrow::before) {
   background: var(--panel-bg, #111);
   border-color: var(--ui-border, rgba(255, 255, 255, 0.15));
 }

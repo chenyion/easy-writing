@@ -1244,7 +1244,7 @@ const {
   aiShortcutTip,
   aiStatusText,
   isAiThinking,
-  autocompleteController,
+  abortAiRequests,
   setAiBusy,
   fetchAiSuggestion,
   cancelAiSuggestion,
@@ -1701,7 +1701,7 @@ const loadChapterContent = async (chapterId: number) => {
   clearChapterReady()
   clearEditorStateSyncTimer()
   // 切章即掐掉在途的续写/补全流，旧章的产物不该再消耗与插入
-  autocompleteController.value?.abort()
+  abortAiRequests()
   editorStore.setActiveChapterTextContent('')
   clearLocalDraftTimer()
   pendingLocalDraftSnapshot = false
@@ -2582,7 +2582,7 @@ defineExpose<WritingEditorExpose>({
 })
 
 onBeforeUnmount(() => {
-  autocompleteController.value?.abort()
+  abortAiRequests()
   clearEntityHoverTimer()
   disposeChromeMeasure()
   if (keydownHandler) {

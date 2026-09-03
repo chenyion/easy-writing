@@ -50,6 +50,9 @@ export const useAiAutocomplete = (options: AiAutocompleteOptions) => {
   const isAiThinking = ref(false)
   const aiBusyCounter = ref(0)
   const autocompleteController = ref<AbortController | null>(null)
+  // 快捷续写单独一把中止控制器：幽灵字插件在每次正文变动时都会"取消建议请求"，
+  // 若与它共用一把，流式续写插进第一个字就会被自己触发的取消掐断
+  const nextBeatController = ref<AbortController | null>(null)
 
   interface AiConfigState {
     enabled: boolean
@@ -170,11 +173,17 @@ export const useAiAutocomplete = (options: AiAutocompleteOptions) => {
       console.warn('AI Copilot fetch failed', error)
       return null
     } finally {
-      if (autocompleteController.value === controller) {
-        autocompleteController.value = null
+      if (nextBeatController.value === controller) {
+        nextBeatController.value = null
       }
       setAiBusy(false)
     }
+  }
+
+  /** 切章/卸载时统一掐掉所有在途 AI 请求（幽灵字建议 + 快捷续写） */
+  const abortAiRequests = () => {
+    autocompleteController.value?.abort()
+    nextBeatController.value?.abort()
   }
 
   const cancelAiSuggestion = () => {
@@ -211,9 +220,11 @@ export const useAiAutocomplete = (options: AiAutocompleteOptions) => {
     }
 
     setAiBusy(true)
+    // 开始续写前掐掉在途的幽灵字建议与上一次续写
     autocompleteController.value?.abort()
+    nextBeatController.value?.abort()
     const controller = new AbortController()
-    autocompleteController.value = controller
+    nextBeatController.value = controller
     const chapterIdAtStart = Number(activeChapterId.value || 0)
     const normalizeFlow = (text: string) => text.replace(/\s+/g, '')
     try {
@@ -312,7 +323,7 @@ export const useAiAutocomplete = (options: AiAutocompleteOptions) => {
     aiShortcutTip,
     aiStatusText,
     isAiThinking,
-    autocompleteController,
+    abortAiRequests,
     setAiBusy,
     fetchAiSuggestion,
     cancelAiSuggestion,

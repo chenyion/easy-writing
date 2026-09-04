@@ -42,8 +42,8 @@
               :state="state"
               :task="task"
               :logs="logs"
-              :model-code="run?.effectiveModelCode || run?.modelCode || ''"
-              :model-name="run?.effectiveModelName || ''"
+              :model-code="taskModelCode"
+              :model-name="taskModelName"
               :stage-text="stageText"
               :writing-scene="writingScene"
               :action-pending="actionPending"
@@ -132,6 +132,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useWritingEditorStore } from '@/stores/writing-editor'
+import { getLocalAiModelDisplayName } from '@/storage/local-ai-models'
 import type {
   WorkflowReviewAction,
   WorkflowRun,
@@ -194,6 +195,13 @@ const props = withDefaults(defineProps<{
   activeIssueKey: '',
   polishedIssueKeys: () => [],
 })
+
+// 任务面板的模型显示名：本地 run 没有服务端回填的 effectiveModelName，
+// 按 code 到本地模型库查名，否则会把内部负数 id 亮给用户
+const taskModelCode = computed(() => String(props.run?.effectiveModelCode || props.run?.modelCode || ''))
+const taskModelName = computed(
+  () => String(props.run?.effectiveModelName || '') || getLocalAiModelDisplayName(taskModelCode.value)
+)
 
 const emit = defineEmits<{
   (event: 'pause'): void

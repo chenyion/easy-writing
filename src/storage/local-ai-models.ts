@@ -177,6 +177,12 @@ export const getLocalAiModelSecret = (code: string): LocalAiModel | null => {
 // ---------------------------------------------------------------------------
 
 /** 分组与模型场景的对应：文本模型供文本辅助与工作流，生图模型供封面 */
+/** 按模型 code 取显示名：任务面板等展示场景用，避免把内部负数 id 亮给用户 */
+export const getLocalAiModelDisplayName = (code: string): string => {
+  const model = getLocalAiModelSecret(code)
+  return model ? String(model.name || model.modelCode || '') : ''
+}
+
 export const sceneOfGroup = (groupCode: AiModelGroupCode): 'text' | 'image' =>
   groupCode === 'image_generation' ? 'image' : 'text'
 

@@ -2374,6 +2374,11 @@ const ensureWorkflowContentPersisted = async (
     const contentVersion = workflowPreviewActive.value
       ? Number(persistedCandidateVersion || 0)
       : Number(currentChapterVersion.value || persistedCandidateVersion || 0)
+    // 向导落书只建目录项不建正文草稿：一章一个字都没生成就中断时版本号为 0。
+    // 空章没有任何内容需要保护，不能因此拦住「继续生成」。
+    if (contentVersion <= 0 && !readEditorText().trim()) {
+      return { ok: true, contentVersion: undefined }
+    }
     return {
       ok: contentVersion > 0,
       contentVersion: contentVersion || undefined,

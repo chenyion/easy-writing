@@ -25,6 +25,7 @@
       :release-notes-only="desktopUpdateNotesOnly"
       @close="closeDesktopUpdateNotes"
       @retry="retryDesktopUpdate"
+      @update="startDesktopUpdate"
       @restart="restartAfterDesktopUpdate"
     />
 
@@ -59,17 +60,18 @@
 <script setup lang="ts">
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import { ref, onBeforeUnmount, onMounted } from 'vue'
-import { ElMessage, ElNotification } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { useThemeStore } from '@/stores/theme'
 import { isTauriRuntime } from '@/storage'
 import { getLocalBackupService } from '@/storage/local-backup-service'
 import {
   checkDesktopUpdate,
+  installDesktopUpdate,
+  dismissDesktopUpdate,
   consumePendingDesktopUpdateNotes,
   type DesktopUpdateSnapshot,
 } from '@/utils/desktop-update'
-import { checkForNewRelease, checkLatestRelease, dismissRelease, type NewReleaseInfo } from '@/utils/update-check'
-import { GITHUB_RELEASES_URL } from '@/config/opensource'
+import { OFFICIAL_DOWNLOAD_URL } from '@/config/opensource'
 import { openLink } from '@/utils/external-link'
 import DesktopTitleBar from '@/components/DesktopTitleBar.vue'
 import GlobalSearchPalette from '@/components/GlobalSearchPalette.vue'
@@ -78,62 +80,10 @@ import DesktopUpdateModal from '@/components/DesktopUpdateModal.vue'
 const themeStore = useThemeStore()
 const backupService = getLocalBackupService()
 const desktopShell = isTauriRuntime()
-// tauri 自动更新器（下载安装那套）仍停用；版本提醒走下面的轻量检查
-const desktopUpdaterEnabled = false
-
-// 轻量更新提醒：启动稳定后查一次 GitHub Releases，有新版弹通知点开下载页。
-// 点通知正文=打开下载页；点右上角 × 关闭=这个版本不再提醒。
-const showReleaseNotification = (release: NewReleaseInfo) => {
-  ElNotification({
-    title: `发现新版本 ${release.tag}`,
-    message: release.name ? `${release.name}｜点击查看更新内容并下载` : '点击查看更新内容并下载',
-    type: 'success',
-    duration: 0,
-    onClick: () => {
-      void openLink(release.url, { title: '版本下载' })
-    },
-    onClose: () => dismissRelease(release.tag),
-  })
-}
-const scheduleReleaseNotice = () => {
-  if (!desktopShell) return
-  window.setTimeout(async () => {
-    const release = await checkForNewRelease()
-    if (release) showReleaseNotification(release)
-  }, 8000)
-}
-
-// 侧栏「检查更新」：手动触发跳过一天一次的闸门和"已点掉"记录，四种结果都要有回音。
-// 网页端拿不到本机版本号，直接打开下载页让用户自己看。
-let manualReleaseCheckRunning = false
-const runManualReleaseCheck = async () => {
-  if (manualReleaseCheckRunning) return
-  manualReleaseCheckRunning = true
-  const pending = ElMessage({ type: 'info', message: '正在检查更新…', duration: 0 })
-  try {
-    const result = await checkLatestRelease({ force: true })
-    if (result.status === 'new') {
-      showReleaseNotification(result.release)
-    } else if (result.status === 'latest') {
-      ElMessage.success(`已是最新版本 v${result.current}`)
-    } else if (result.status === 'error') {
-      ElNotification({
-        title: '检查更新失败',
-        message: `${result.message}｜点击打开下载页自行查看`,
-        type: 'warning',
-        duration: 8000,
-        onClick: () => {
-          void openLink(GITHUB_RELEASES_URL, { title: '版本下载' })
-        },
-      })
-    } else {
-      void openLink(GITHUB_RELEASES_URL, { title: '版本下载' })
-    }
-  } finally {
-    pending.close()
-    manualReleaseCheckRunning = false
-  }
-}
+let automaticUpdateTimer: ReturnType<typeof setTimeout> | null = null
+let updateCheckPromise: Promise<void> | null = null
+let manualUpdateFeedback = false
+let manualUpdateMessage: ReturnType<typeof ElMessage> | null = null
 const runtimeBodyClass = desktopShell ? 'desktop-runtime' : 'web-runtime'
 
 type AppContextAction = 'cut' | 'copy' | 'paste' | 'selectAll'
@@ -324,27 +274,59 @@ const setupDesktopCloseBackup = async () => {
 }
 
 const applyDesktopUpdateState = (state: DesktopUpdateSnapshot) => {
-  const activeUpdateInfo = desktopUpdateVisible.value && !desktopUpdateNotesOnly.value
-    ? desktopUpdateState.value.info
-    : undefined
-  const nextState = activeUpdateInfo && !state.info ? { ...state, info: activeUpdateInfo } : state
-  desktopUpdateState.value = nextState
-  // 检查阶段不打开遮罩，只有确认更新或强制更新失败后才接管界面。
-  const shouldShowUpdateModal = nextState.phase !== 'checking' && (nextState.phase !== 'error' || Boolean(nextState.info))
-  if (shouldShowUpdateModal) {
+  desktopUpdateState.value = state
+  if (state.phase !== 'checking') {
     desktopUpdateNotesOnly.value = false
-    desktopUpdateVisible.value = true
+    desktopUpdateVisible.value = state.phase !== 'error' || Boolean(state.info) || manualUpdateFeedback
   }
 }
 
 const runDesktopUpdateCheck = async (silent = false) => {
-  const result = await checkDesktopUpdate({
-    silent,
-    onStateChange: applyDesktopUpdateState,
-  })
-  if (!result.updated && desktopUpdateState.value.phase === 'checking') {
-    desktopUpdateVisible.value = false
+  if (!silent && automaticUpdateTimer) {
+    clearTimeout(automaticUpdateTimer)
+    automaticUpdateTimer = null
   }
+  if (!desktopShell) {
+    if (!silent) void openLink(OFFICIAL_DOWNLOAD_URL, { title: '官网下载' })
+    return
+  }
+  if (['downloading', 'preparing', 'installing', 'installed'].includes(desktopUpdateState.value.phase)
+    && !desktopUpdateNotesOnly.value) {
+    if (!silent) desktopUpdateVisible.value = true
+    return
+  }
+  if (silent && desktopUpdateVisible.value) return
+  if (!silent) {
+    manualUpdateFeedback = true
+    manualUpdateMessage ??= ElMessage({ type: 'info', message: '正在检查更新…', duration: 0 })
+  }
+  if (updateCheckPromise) return updateCheckPromise
+  desktopUpdateVisible.value = false
+  desktopUpdateNotesOnly.value = false
+  updateCheckPromise = (async () => {
+    const result = await checkDesktopUpdate({ onStateChange: applyDesktopUpdateState })
+    if (result.status === 'latest' && manualUpdateFeedback) ElMessage.success('当前已是最新版本')
+  })()
+  try {
+    await updateCheckPromise
+  } finally {
+    manualUpdateMessage?.close()
+    manualUpdateMessage = null
+    manualUpdateFeedback = false
+    updateCheckPromise = null
+  }
+}
+
+const prepareDesktopUpdate = async () => {
+  const backup = await backupService.backupBeforeExit({ requireSnapshotConfirmation: true })
+  if (!backup.ok) throw new Error(backup.result.failed[0]?.message || '作品保存失败，已暂停更新，请保存后重试。')
+  const { flushWriteJournal } = await import('@/storage/write-journal')
+  await flushWriteJournal()
+}
+
+const startDesktopUpdate = async () => {
+  if (desktopUpdatePreviewEnabled) return
+  await installDesktopUpdate({ beforeInstall: prepareDesktopUpdate, onStateChange: applyDesktopUpdateState })
 }
 
 const showPendingDesktopUpdateNotes = async () => {
@@ -361,25 +343,25 @@ const showPendingDesktopUpdateNotes = async () => {
 
 const showDesktopUpdatePreview = () => {
   desktopUpdateState.value = {
-    phase: 'installed',
+    phase: 'available',
     info: {
-      currentVersion: '1.1.3',
-      version: '1.1.4',
-      date: '2026-07-25T10:00:00+08:00',
+      currentVersion: '1.0.5',
+      version: '1.0.6',
+      date: '2026-09-04T10:00:00+08:00',
       body: [
-        '1. 优化消息通知分类，重要系统消息更加醒目；',
-        '2. 更新公告增加创作者社群入口；',
-        '3. 修复部分已知问题。',
+        '1. 支持从官网检查并安装新版本；',
+        '2. 更新前展示版本说明与下载进度；',
+        '3. 安装前自动保存并备份作品。',
       ].join('\n'),
     },
-    message: '本地样式预览',
+    message: '本地样式预览，不会下载安装。',
   }
-  desktopUpdateNotesOnly.value = true
+  desktopUpdateNotesOnly.value = false
   desktopUpdateVisible.value = true
 }
 
 const handleDesktopUpdateRequest = () => {
-  void runManualReleaseCheck()
+  void runDesktopUpdateCheck(false)
 }
 
 const retryDesktopUpdate = () => {
@@ -387,14 +369,29 @@ const retryDesktopUpdate = () => {
 }
 
 const closeDesktopUpdateNotes = () => {
+  if (['downloading', 'preparing', 'installing'].includes(desktopUpdateState.value.phase)) return
+  void dismissDesktopUpdate()
+  if (desktopUpdateNotesOnly.value) {
+    desktopUpdateState.value = { phase: 'checking', message: '正在检查新版本...' }
+  }
   desktopUpdateVisible.value = false
   desktopUpdateNotesOnly.value = false
 }
 
+let updateRestarting = false
 const restartAfterDesktopUpdate = async () => {
-  if (!isTauriRuntime()) return
-  const { invoke } = await import('@tauri-apps/api/core')
-  await invoke('restart_app')
+  if (!isTauriRuntime() || updateRestarting) return
+  updateRestarting = true
+  try {
+    await prepareDesktopUpdate()
+    await destroyDesktopSubWindows()
+    const { invoke } = await import('@tauri-apps/api/core')
+    await invoke('restart_app')
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '重启失败，请稍后重试')
+  } finally {
+    updateRestarting = false
+  }
 }
 
 // 周期性本地文件备份：把设置里的“备份间隔(10/20/30分钟)”接上真正的定时器。
@@ -472,14 +469,16 @@ onMounted(() => {
   void schedulePeriodicBackup()
   if (desktopUpdatePreviewEnabled) {
     showDesktopUpdatePreview()
-  } else if (desktopUpdaterEnabled) {
+  } else if (desktopShell) {
     void showPendingDesktopUpdateNotes()
-    void runDesktopUpdateCheck(true)
+    automaticUpdateTimer = setTimeout(() => void runDesktopUpdateCheck(true), 8000)
   }
-  scheduleReleaseNotice()
 })
 
 onBeforeUnmount(() => {
+  if (automaticUpdateTimer) clearTimeout(automaticUpdateTimer)
+  manualUpdateMessage?.close()
+  void dismissDesktopUpdate()
   document.body.classList.remove(runtimeBodyClass)
   window.removeEventListener('contextmenu', handleGlobalContextMenu, true)
   window.removeEventListener('click', closeAppContextMenu)

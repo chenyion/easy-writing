@@ -1,7 +1,9 @@
 <template>
   <Teleport to="body">
-    <div v-if="visible" class="desktop-update-overlay">
+    <div v-if="visible" class="desktop-update-overlay" @keydown="handleKeydown">
       <section
+        ref="dialogRef"
+        tabindex="-1"
         class="desktop-update-card"
         role="dialog"
         aria-modal="true"
@@ -32,7 +34,7 @@
               <div class="release-notes-body">{{ releaseNotes }}</div>
             </div>
 
-            <div v-if="!releaseNotesOnly" class="update-progress">
+            <div v-if="!releaseNotesOnly && state.phase !== 'available'" class="update-progress" aria-live="polite">
               <div class="progress-meta">
                 <span>{{ state.message }}</span>
                 <strong v-if="progressPercent !== null">{{ progressPercent }}%</strong>
@@ -52,15 +54,17 @@
             </div>
 
             <div class="desktop-update-actions">
-              <button v-if="releaseNotesOnly" class="ink-btn ink-btn-primary" type="button" @click="$emit('close')">
+              <template v-if="state.phase === 'available' && !releaseNotesOnly">
+                <button class="ink-btn" type="button" @click="$emit('close')">稍后再说</button>
+                <button class="ink-btn ink-btn-primary" type="button" @click="$emit('update')">立即更新</button>
+              </template>
+              <button v-else-if="releaseNotesOnly" class="ink-btn ink-btn-primary" type="button" @click="$emit('close')">
                 知道了
               </button>
-              <button v-else-if="state.phase === 'error' && !state.info" class="ink-btn ink-btn-primary" type="button" @click="$emit('close')">
-                知道了
-              </button>
-              <button v-else-if="state.phase === 'error'" class="ink-btn ink-btn-primary" type="button" @click="$emit('retry')">
-                重试更新
-              </button>
+              <template v-else-if="state.phase === 'error'">
+                <button class="ink-btn" type="button" @click="$emit('close')">稍后再说</button>
+                <button class="ink-btn ink-btn-primary" type="button" @click="$emit('retry')">重新检查</button>
+              </template>
               <button v-else-if="state.phase === 'installed'" class="ink-btn ink-btn-primary" type="button" @click="$emit('restart')">
                 重启应用
               </button>
@@ -76,7 +80,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch, nextTick } from 'vue'
 import type { DesktopUpdateSnapshot } from '@/utils/desktop-update'
 
 const props = defineProps<{
@@ -85,26 +89,61 @@ const props = defineProps<{
   releaseNotesOnly?: boolean
 }>()
 
-defineEmits<{
+const emit = defineEmits<{
   (event: 'close'): void
   (event: 'retry'): void
+  (event: 'update'): void
   (event: 'restart'): void
 }>()
+
+const dialogRef = ref<HTMLElement | null>(null)
+let previousFocus: HTMLElement | null = null
+watch(() => props.visible, async visible => {
+  if (visible) {
+    previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    await nextTick()
+    dialogRef.value?.focus()
+  } else if (previousFocus?.isConnected) {
+    previousFocus.focus()
+  }
+})
+const handleKeydown = (event: KeyboardEvent) => {
+  if (event.key === 'Escape' && (props.releaseNotesOnly || ['available', 'error'].includes(props.state.phase))) {
+    event.preventDefault()
+    emit('close')
+  }
+  if (event.key !== 'Tab') return
+  const buttons = Array.from(dialogRef.value?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') || [])
+  const first = buttons[0]
+  const last = buttons[buttons.length - 1]
+  if (!first) {
+    event.preventDefault()
+    dialogRef.value?.focus()
+  } else if (event.shiftKey && (document.activeElement === first || document.activeElement === dialogRef.value)) {
+    event.preventDefault()
+    last?.focus()
+  } else if (!event.shiftKey && (document.activeElement === last || document.activeElement === dialogRef.value)) {
+    event.preventDefault()
+    first.focus()
+  }
+}
 
 const title = computed(() => {
   if (props.releaseNotesOnly) return `已更新到 ${props.state.info?.version || '最新版本'}`
   if (props.state.phase === 'installed') return '更新已安装'
   if (props.state.phase === 'error') return props.state.info ? '更新失败' : '检查更新失败'
   if (props.state.phase === 'checking') return '正在检查更新'
+  if (props.state.phase === 'preparing') return '正在保存作品'
   return `发现新版本 ${props.state.info?.version || ''}`
 })
 
 const subtitle = computed(() => {
   if (props.releaseNotesOnly) return '以下是本次版本更新内容。'
   if (props.state.phase === 'installed') return '请重启应用后继续使用新版本。'
-  if (props.state.phase === 'error') return props.state.info ? '当前版本需要完成更新后继续使用。' : '暂时无法连接更新服务。'
+  if (props.state.phase === 'error') return '可稍后重试，当前版本仍可继续使用。'
   if (props.state.phase === 'checking') return '正在连接更新服务。'
-  return '当前版本需要完成更新后继续使用。'
+  if (props.state.phase === 'available') return '查看更新内容后，选择立即更新或稍后再说。'
+  return '更新期间请保持应用开启，安装前会保存并备份作品。'
 })
 
 const headIcon = computed(() => {
@@ -162,6 +201,7 @@ const downloadText = computed(() => {
 }
 
 .desktop-update-card {
+  outline: none;
   width: min(560px, calc(100vw - 48px));
   max-height: min(720px, calc(100vh - 48px));
   overflow: hidden;
@@ -354,6 +394,10 @@ h2 {
   margin-top: auto;
 
   .ink-btn {
+    &:focus-visible {
+      outline: 2px solid var(--ink-accent);
+      outline-offset: 3px;
+    }
     min-width: 112px;
 
     &:disabled {

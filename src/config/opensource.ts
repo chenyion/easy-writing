@@ -7,8 +7,5 @@ export const GITHUB_NEW_ISSUE_URL = `${GITHUB_REPO_URL}/issues/new`
 
 export const GITHUB_RELEASES_URL = `${GITHUB_REPO_URL}/releases`
 
-/** GitHub 公开 API：最新 Release（轻量更新提醒用，无需任何鉴权） */
-export const GITHUB_LATEST_RELEASE_API_URL = `${GITHUB_REPO_URL.replace(
-  'https://github.com/',
-  'https://api.github.com/repos/'
-)}/releases/latest`
+/** 网页端检查更新时进入官网下载安装。 */
+export const OFFICIAL_DOWNLOAD_URL = 'https://yichuang.xyz/#download'

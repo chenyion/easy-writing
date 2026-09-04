@@ -1,11 +1,9 @@
 import { isTauriRuntime } from '@/storage'
-import { ElMessage } from 'element-plus'
-import { inkConfirm } from '@/utils/ink-confirm'
-import type { DownloadEvent } from '@tauri-apps/plugin-updater'
+import type { DownloadEvent, Update } from '@tauri-apps/plugin-updater'
 
 const DESKTOP_UPDATE_NOTES_KEY = 'ew-desktop-update-notes'
 
-export type DesktopUpdatePhase = 'checking' | 'downloading' | 'installing' | 'installed' | 'error'
+export type DesktopUpdatePhase = 'checking' | 'available' | 'preparing' | 'downloading' | 'installing' | 'installed' | 'error'
 
 export interface DesktopUpdateInfo {
   currentVersion: string
@@ -28,14 +26,12 @@ export interface DesktopUpdateSnapshot {
   error?: string
 }
 
-export interface DesktopUpdateResult {
-  enabled: boolean
-  updated: boolean
-  message: string
-}
+export type DesktopUpdateResult =
+  | { status: 'available'; info: DesktopUpdateInfo }
+  | { status: 'latest' | 'unsupported' }
+  | { status: 'error'; message: string }
 
 export interface DesktopUpdateOptions {
-  silent?: boolean
   onStateChange?: (state: DesktopUpdateSnapshot) => void
 }
 
@@ -45,7 +41,20 @@ interface StoredDesktopUpdateNotes extends DesktopUpdateInfo {
 }
 
 // 避免启动自动检查和手动检查同时触发重复下载。
-let activeUpdatePromise: Promise<DesktopUpdateResult> | null = null
+let activeCheckPromise: Promise<DesktopUpdateResult> | null = null
+let activeInstallPromise: Promise<void> | null = null
+let pendingUpdate: Update | null = null
+
+const errorMessage = (error: unknown) => error instanceof Error
+  ? error.message
+  : typeof error === 'string' ? error : '无法连接更新服务，请稍后重试'
+
+export const dismissDesktopUpdate = async () => {
+  if (activeInstallPromise) return
+  const update = pendingUpdate
+  pendingUpdate = null
+  await update?.close().catch(() => {})
+}
 
 const readUpdateString = (value: unknown) => typeof value === 'string' ? value : undefined
 
@@ -94,10 +103,10 @@ const updateDownloadProgress = (
   }
 
   onStateChange?.({
-    phase: event.event === 'Finished' ? 'installing' : 'downloading',
+    phase: event.event === 'Finished' ? 'preparing' : 'downloading',
     info,
     progress: { ...progress },
-    message: event.event === 'Finished' ? '下载完成，正在安装更新...' : '正在下载更新包...',
+    message: event.event === 'Finished' ? '下载完成，正在保存作品...' : '正在下载更新包...',
   })
 }
 
@@ -128,106 +137,70 @@ export const consumePendingDesktopUpdateNotes = async (): Promise<DesktopUpdateI
   }
 }
 
+/** 检查只返回版本信息；自动和手动入口都必须经用户点击后才能安装。 */
 export const checkDesktopUpdate = async (options: DesktopUpdateOptions = {}): Promise<DesktopUpdateResult> => {
-  if (!isTauriRuntime()) {
-    return {
-      enabled: false,
-      updated: false,
-      message: '更新功能仅桌面端支持',
-    }
-  }
+  if (!isTauriRuntime()) return { status: 'unsupported' }
+  if (activeInstallPromise) return { status: 'error', message: '正在更新，请等待完成' }
+  if (activeCheckPromise) return activeCheckPromise
 
-  if (activeUpdatePromise) return activeUpdatePromise
-
-  activeUpdatePromise = (async () => {
-    let detectedUpdateInfo: DesktopUpdateInfo | undefined
-
-    options.onStateChange?.({
-      phase: 'checking',
-      message: '正在检查新版本...',
-    })
-
+  activeCheckPromise = (async (): Promise<DesktopUpdateResult> => {
+    await dismissDesktopUpdate()
+    options.onStateChange?.({ phase: 'checking', message: '正在检查新版本...' })
     try {
       const { check } = await import('@tauri-apps/plugin-updater')
-      const update = await check()
-      if (!update) {
-        if (!options.silent) ElMessage.info('当前已是最新版本')
-        return {
-          enabled: true,
-          updated: false,
-          message: '当前已是最新版本',
-        }
-      }
-
-      const info = toUpdateInfo(update)
-      detectedUpdateInfo = info
-      const progress: DesktopUpdateProgress = { downloaded: 0 }
-
-      // 静默检查（如启动自动检查）发现新版本时，不直接下载安装打断写作，
-      // 而是弹确认让用户自行选择更新时机；用户选"稍后"则本次跳过。
-      if (options.silent) {
-        const confirmed = await inkConfirm(
-          `发现新版本 ${info.version}，是否现在更新？更新将在下载完成、重启应用后生效。`,
-          '版本更新',
-          {
-            confirmButtonText: '立即更新',
-            cancelButtonText: '稍后再说',
-            type: 'info',
-          }
-        )
-          .then(() => true)
-          .catch(() => false)
-        if (!confirmed) {
-          return {
-            enabled: true,
-            updated: false,
-            message: '已跳过本次更新',
-          }
-        }
-      }
-
-      savePendingUpdateNotes(info)
-      options.onStateChange?.({
-        phase: 'downloading',
-        info,
-        progress,
-        message: '发现新版本，正在下载更新包...',
-      })
-
-      await update.downloadAndInstall((event) => {
-        updateDownloadProgress(event, info, progress, options.onStateChange)
-      })
-
-      options.onStateChange?.({
-        phase: 'installed',
-        info,
-        progress: { ...progress, percent: 100 },
-        message: '更新已安装，请重启应用后继续使用。',
-      })
-
-      return {
-        enabled: true,
-        updated: true,
-        message: `已安装新版本 ${update.version}，重启后生效`,
-      }
+      pendingUpdate = await check({ timeout: 15000 })
+      if (!pendingUpdate) return { status: 'latest' }
+      const info = toUpdateInfo(pendingUpdate)
+      options.onStateChange?.({ phase: 'available', info, message: '新版本已准备好，可选择立即更新。' })
+      return { status: 'available', info }
     } catch (error) {
-      const message = (error as { message?: string } | null)?.message || '检查更新失败'
-      options.onStateChange?.({
-        phase: 'error',
-        info: detectedUpdateInfo,
-        message,
-        error: message,
-      })
-      if (!options.silent) ElMessage.error(message)
-      return {
-        enabled: true,
-        updated: false,
-        message,
-      }
-    } finally {
-      activeUpdatePromise = null
+      const message = errorMessage(error)
+      options.onStateChange?.({ phase: 'error', message, error: message })
+      return { status: 'error', message }
     }
   })()
+  try {
+    return await activeCheckPromise
+  } finally {
+    activeCheckPromise = null
+  }
+}
 
-  return activeUpdatePromise
+/** Windows 安装会退出进程，保存必须在 install 之前完成。 */
+export const installDesktopUpdate = async (options: DesktopUpdateOptions & {
+  beforeInstall: () => Promise<void>
+}): Promise<void> => {
+  if (activeInstallPromise) return activeInstallPromise
+  const update = pendingUpdate
+  if (!update) {
+    options.onStateChange?.({ phase: 'error', message: '请重新检查更新', error: '更新信息已失效，请重新检查更新。' })
+    return
+  }
+  activeInstallPromise = (async () => {
+    const info = toUpdateInfo(update)
+    const progress: DesktopUpdateProgress = { downloaded: 0 }
+    const emit = (phase: DesktopUpdatePhase, message: string) => options.onStateChange?.({ phase, info, progress: { ...progress }, message })
+    try {
+      emit('downloading', '正在下载更新包...')
+      await update.download(event => updateDownloadProgress(event, info, progress, options.onStateChange), { timeout: 120000 })
+      emit('preparing', '正在保存并备份作品，请稍候...')
+      await options.beforeInstall()
+      savePendingUpdateNotes(info)
+      emit('installing', '作品已保存，正在安装更新...')
+      await update.install()
+      emit('installed', '更新已安装，重启后生效。')
+    } catch (error) {
+      const message = errorMessage(error)
+      window.localStorage.removeItem(DESKTOP_UPDATE_NOTES_KEY)
+      options.onStateChange?.({ phase: 'error', info, message, error: message })
+    } finally {
+      pendingUpdate = null
+      await update.close().catch(() => {})
+    }
+  })()
+  try {
+    await activeInstallPromise
+  } finally {
+    activeInstallPromise = null
+  }
 }

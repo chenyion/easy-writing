@@ -117,7 +117,7 @@
 
 <script setup lang="ts">
 import type { JsonRecord } from '@/types/json'
-import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useThemeStore } from '@/stores/theme'
@@ -153,6 +153,7 @@ interface WritingEditorExpose {
   snapshotLocalDraft: () => Promise<boolean>
   getContentVersion: () => number
   applyWorkflowGeneratedText: (text: string) => void
+  settleWorkflowGeneratedText: (chapterId: number) => Promise<boolean>
   focusEditor: () => void
   locateIssueHighlight: (issueKey: string) => boolean
   startIssuePolish: (input: {
@@ -991,6 +992,20 @@ const syncWorkflowCheckpointContent = async (task: WorkflowTask | null, options:
     })
     return
   }
+  if (task && !isWorkflowTaskStreaming(task)) {
+    // 等待暂停状态传到编辑器，解除生成锁后再接收本地稿。
+    await nextTick()
+    // 暂停/恢复页面读取真实本地稿，旧 checkpoint 不得覆盖人工修改。
+    try {
+      if (await writingEditorRef.value?.settleWorkflowGeneratedText(chapterId)) {
+        workflowSnapshotCache.delete(chapterId)
+        workflowRenderedSnapshots.delete(chapterId)
+      }
+    } catch (error) {
+      console.error('读取暂停章节失败', error)
+    }
+    return
+  }
   if (!checkpointId) return
   if (!options.force && isWorkflowTaskStreaming(task) && (workflowSnapshotCache.size || workflowRenderedChapterId.value)) return
 
@@ -1113,7 +1128,7 @@ const applyWorkflowGeneratedText = async (chapterId: number, text: string) => {
       renderWorkflowSnapshot(chapterId, targetText)
       workflowSnapshotCache.delete(chapterId)
       updateWorkflowRenderedWords(chapterId, targetText)
-      appendWorkflowLog('本章审校修订完成，内容已更新至定稿')
+      // 普通快照差异不代表发生了审校或定稿。
       return
     }
     workflowRenderedSnapshots.set(chapterId, currentText)

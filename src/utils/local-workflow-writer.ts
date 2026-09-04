@@ -32,6 +32,7 @@ import {
 } from '@/utils/local-workflow-runtime'
 import { parseChineseWordTarget, resolveRunOutlineUi, resolveRunSettingUi } from '@/utils/local-workflow-book'
 import { countWords } from '@/utils/word-count'
+import { workflowContentVersion } from '@/utils/workflow-local-draft'
 import { promptTemperature } from '@/storage/local-prompts'
 import { recordAiChapterLanding } from '@/storage/local-write-stats'
 
@@ -123,7 +124,7 @@ export const saveGeneratedChapterContent = async (params: {
 
 export const readChapterText = async (bookId: string, chapterId: number) => {
   const draft = await getWritingStorage().getChapterByIdentity(LOCAL_USER_ID, bookId, chapterId)
-  return { text: draft?.textContent || '', contentVersion: Number(draft?.remoteVersion || 0), contentJson: draft?.contentJson ?? null, title: draft?.title || '' }
+  return { text: draft?.textContent || '', contentVersion: workflowContentVersion(draft), contentJson: draft?.contentJson ?? null, title: draft?.title || '' }
 }
 
 export const resolveWorkflowModelCode = async (run: LocalWorkflowRun) => {

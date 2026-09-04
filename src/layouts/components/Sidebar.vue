@@ -147,7 +147,7 @@ const currentRoute = computed(() => route.path)
 const appConfigStore = useAppConfigStore()
 const { isFeatureEnabled } = appConfigStore
 const localSettingsVisible = ref(false)
-// 「检查更新」交给 App.vue：桌面端查 GitHub 最新 Release，网页端直接打开下载页
+// 「检查更新」交给 App.vue：桌面端检查官网更新源，网页端打开官网下载页
 const checkForUpdates = () => {
   window.dispatchEvent(new CustomEvent('ew-desktop-update-check'))
 }

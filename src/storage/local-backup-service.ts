@@ -212,7 +212,7 @@ export class LocalBackupService {
   // 超时窗口放宽到 4s：本地快照正常远快于此，超时基本意味着编辑器真的卡住。
   // 仍在超时时返回 true——因为无编辑器挂载时本就无人应答（没内容要存），
   // 若改成 false 会在“当前不在写作页”的正常关闭场景误报保存失败并弹确认框。
-  async snapshotActiveWritingEditor(timeout = 4000) {
+  async snapshotActiveWritingEditor(timeout = 4000, requireConfirmation = false) {
     if (typeof window === 'undefined') return true
     // 无编辑器挂载时（首页/书架等页面关窗）直接通过，
     // 否则事件无人应答会傻等满超时窗口，用户感知为"关闭卡顿"。
@@ -231,13 +231,13 @@ export class LocalBackupService {
         window.removeEventListener('ew-writing-local-snapshot-done', done)
         // 超时未收到应答：可能无编辑器（正常）也可能编辑器卡住（异常），记录以便排查。
         console.warn('关闭前当前章节快照未在 %dms 内确认', timeout)
-        resolve(true)
+        resolve(!requireConfirmation)
       }, timeout)
     })
   }
 
-  async backupBeforeExit(): Promise<BackupBeforeExitResult> {
-    const snapshotted = await this.snapshotActiveWritingEditor()
+  async backupBeforeExit(options: { requireSnapshotConfirmation?: boolean } = {}): Promise<BackupBeforeExitResult> {
+    const snapshotted = await this.snapshotActiveWritingEditor(4000, options.requireSnapshotConfirmation)
     if (!snapshotted) {
       return {
         ok: false,

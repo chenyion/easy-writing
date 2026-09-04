@@ -586,6 +586,7 @@
 </template>
 
 <script setup lang="ts">
+import { workflowContentVersion } from '@/utils/workflow-local-draft'
 import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import { markWritingSnapshotProvider } from '@/storage/local-backup-service'
 import { EditorContent, Editor } from '@tiptap/vue-3'
@@ -975,6 +976,7 @@ interface WritingEditorExpose {
   snapshotLocalDraft: () => Promise<boolean>
   getContentVersion: () => number
   applyWorkflowGeneratedText: (text: string) => void
+  settleWorkflowGeneratedText: (chapterId: number) => Promise<boolean>
   focusEditor: () => void
   /** 审稿建议"定位原文"：滚动到命中段并闪烁；多段命中时轮巡 */
   locateIssueHighlight: (issueKey: string) => boolean
@@ -1037,6 +1039,7 @@ const lastSavedContent = ref('')
 const lastSavedTitle = ref('')
 const lastSavedContentJson = ref<unknown>(null)
 const currentChapterVersion = ref(0)
+const currentChapterLocalVersion = ref(0)
 // 自动生文流式快照是只读预览，不能被本地同步服务当成用户手稿上传。
 const workflowPreviewActive = ref(false)
 let currentSavePromise: Promise<boolean> | null = null
@@ -1502,6 +1505,9 @@ const snapshotLocalDraft = async () => {
   if (!snapshot) return false
   try {
     const saved = await writingStorage.saveChapterLocal(snapshot)
+    if (String(activeChapterId.value) === String(saved.chapterId)) {
+      currentChapterLocalVersion.value = workflowContentVersion(saved)
+    }
     captureLocalVersion(saved)
     await updateLocalChapterMeta(snapshot)
     lastSavedContent.value = snapshot.textContent
@@ -1638,6 +1644,9 @@ const saveChapterContent = async (
           return null
         })
       if (!localDraft) return false
+      if (String(activeChapterId.value) === String(localDraft.chapterId)) {
+        currentChapterLocalVersion.value = workflowContentVersion(localDraft)
+      }
       captureLocalVersion(localDraft)
 
       const wordLen = countWords(text)
@@ -1698,6 +1707,7 @@ const loadChapterContent = async (chapterId: number) => {
   const requestId = ++latestChapterRequestId
   suppressAutoSave.value = true
   workflowPreviewActive.value = false
+  currentChapterLocalVersion.value = 0
   clearChapterReady()
   clearEditorStateSyncTimer()
   // 切章即掐掉在途的续写/补全流，旧章的产物不该再消耗与插入
@@ -1735,6 +1745,7 @@ const loadChapterContent = async (chapterId: number) => {
 
     const title = localDraft?.title || activeChapterTitle.value || ''
     currentChapterVersion.value = Number(localDraft?.remoteVersion || localDraft?.baseRemoteVersion || 0)
+    currentChapterLocalVersion.value = workflowContentVersion(localDraft)
     editorStore.setChapterTitle(title)
     editorStore.resetLocalSessionWords()
     createEditorInstance(localDraft?.contentJson ?? localDraft?.textContent ?? EMPTY_EDITOR_DOC)
@@ -1793,6 +1804,7 @@ watch(
       lastSavedTitle.value = ''
       lastSavedContentJson.value = null
       currentChapterVersion.value = 0
+      currentChapterLocalVersion.value = 0
       pendingLocalDraftSnapshot = false
       editorStore.setActiveChapterTextContent('')
       editorStore.setChapterWordCount(0)
@@ -2323,6 +2335,29 @@ const applyWorkflowGeneratedText = (value: string) => {
   }
 }
 
+/** 任务停驻后以本地稿件结束流式预览，保留作者正在编辑的内容。 */
+const settleWorkflowGeneratedText = async (chapterId: number): Promise<boolean> => {
+  if (Number(activeChapterId.value) !== chapterId || workflowLocked.value) return false
+  const requestId = latestChapterRequestId
+  if (!chapterContentReady.value) return false
+  if (!workflowPreviewActive.value && hasUnsavedChanges()) return true
+  const draft = await writingStorage.getChapterByIdentity(
+    resolveChapterStorageUserId(), resolveCurrentBookId(), chapterId,
+  )
+  if (isStaleChapterRequest(requestId) || Number(activeChapterId.value) !== chapterId || workflowLocked.value) return false
+  if (!workflowPreviewActive.value && hasUnsavedChanges()) return true
+  if (!draft || draft.workflowPreview) return false
+  if (readEditorText() !== draft.textContent) applyWorkflowGeneratedText(draft.textContent)
+  workflowPreviewActive.value = false
+  currentChapterVersion.value = Number(draft.remoteVersion || draft.baseRemoteVersion || 0)
+  currentChapterLocalVersion.value = workflowContentVersion(draft)
+  lastSavedContent.value = readEditorText()
+  lastSavedTitle.value = activeChapterTitle.value
+  lastSavedContentJson.value = draft.contentJson
+  editorStore.setChapterSaveState('local_only', '已保存本机')
+  return true
+}
+
 const focusEditor = () => {
   if (workflowLocked.value) return
   editor.value?.commands.focus()
@@ -2368,30 +2403,38 @@ const ensureWorkflowContentPersisted = async (
       contentVersion: Number(persistedCandidateVersion || 0) || undefined,
     }
   }
-  // 开源版"已保存"的终态是仅本地（local_only）；只有用户真改过正文才需要重新落盘。
-  const requiresRemoteSave = !workflowPreviewActive.value && hasUnsavedChanges()
-  if (!requiresRemoteSave) {
-    const contentVersion = workflowPreviewActive.value
-      ? Number(persistedCandidateVersion || 0)
-      : Number(currentChapterVersion.value || persistedCandidateVersion || 0)
-    // 向导落书只建目录项不建正文草稿：一章一个字都没生成就中断时版本号为 0。
-    // 空章没有任何内容需要保护，不能因此拦住「继续生成」。
-    if (contentVersion <= 0 && !readEditorText().trim()) {
-      return { ok: true, contentVersion: undefined }
+  if (!chapterContentReady.value) return { ok: false, message: '正文尚未加载完成，请稍后重试' }
+  const chapterId = Number(activeChapterId.value)
+  const requestId = latestChapterRequestId
+  try {
+    if (workflowPreviewActive.value) await settleWorkflowGeneratedText(chapterId)
+    if (isStaleChapterRequest(requestId) || chapterId !== Number(activeChapterId.value)) {
+      return { ok: false, message: '当前章节已切换，请重新操作' }
     }
-    return {
-      ok: contentVersion > 0,
-      contentVersion: contentVersion || undefined,
-      message:
-        contentVersion > 0
-          ? undefined
-          : '无法确认当前正文版本，请重新打开本章后再试',
+    // 从数据库确认本地版本，不能把 remoteVersion=0 当作未保存。
+    if (!workflowPreviewActive.value && !hasUnsavedChanges()) {
+      const draft = await writingStorage.getChapterByIdentity(
+        resolveChapterStorageUserId(), resolveCurrentBookId(), chapterId,
+      )
+      if (isStaleChapterRequest(requestId) || chapterId !== Number(activeChapterId.value)) {
+        return { ok: false, message: '当前章节已切换，请重新操作' }
+      }
+      if (draft && !draft.workflowPreview && draft.textContent === readEditorText() && draft.title === activeChapterTitle.value) {
+        currentChapterLocalVersion.value = workflowContentVersion(draft)
+        editorStore.setChapterSaveState('local_only', '已保存本机')
+        return { ok: currentChapterLocalVersion.value > 0, contentVersion: currentChapterLocalVersion.value || undefined }
+      }
+      if (!draft && !readEditorText().trim()) return { ok: true }
     }
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : '无法读取本地正文，请稍后重试' }
   }
+  // 只有断点而尚无正式本地稿时，显式保存当前预览后才能继续。
+  workflowPreviewActive.value = false
   // 若点击继续时上一轮自动保存仍在进行，等待后再补交期间产生的新内容，最多收敛三轮。
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    if (workflowLocked.value)
-      return { ok: false, message: '当前正文暂时无法保存，请稍后重试' }
+    if (workflowLocked.value || isStaleChapterRequest(requestId) || chapterId !== Number(activeChapterId.value))
+      return { ok: false, message: '当前正文暂时无法保存或章节已切换，请稍后重试' }
     const targetText = readEditorText()
     const targetTitle = activeChapterTitle.value
     const saved = await saveChapterContent(false, {
@@ -2406,11 +2449,13 @@ const ensureWorkflowContentPersisted = async (
       // 本地落盘成功即终态（保存状态为 local_only）
       chapterSaveState.value === 'local_only' &&
       contentStable &&
-      !workflowLocked.value
+      !workflowLocked.value &&
+      !isStaleChapterRequest(requestId) &&
+      chapterId === Number(activeChapterId.value)
     ) {
       return {
         ok: true,
-        contentVersion: Number(currentChapterVersion.value || 0) || undefined,
+        contentVersion: Number(currentChapterLocalVersion.value || 0) || undefined,
       }
     }
     const changedWhileSaving =
@@ -2578,8 +2623,9 @@ defineExpose<WritingEditorExpose>({
   hasUnsavedChanges,
   ensurePersisted,
   snapshotLocalDraft,
-  getContentVersion: () => Number(currentChapterVersion.value || 0),
+  getContentVersion: () => Number(currentChapterLocalVersion.value || 0),
   applyWorkflowGeneratedText,
+  settleWorkflowGeneratedText,
   focusEditor,
   locateIssueHighlight,
   startIssuePolish,

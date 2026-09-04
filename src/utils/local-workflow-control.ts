@@ -8,7 +8,7 @@ import type {
 } from '@/types/workflow'
 import { buildParagraphPolishMessages, buildPlotOutlineMessages } from '@/config/workflow-prompts'
 import { getLocalLibraryStorage } from '@/storage/local-library'
-import { createLocalEntityId, nowIso } from '@/storage/local-library-utils'
+import { createLocalEntityId, nowIso, LOCAL_USER_ID } from '@/storage/local-library-utils'
 import {
   readLocalWorkflowRun,
   readRepairedLocalTask,
@@ -17,6 +17,9 @@ import {
   type LocalWorkflowRun,
 } from '@/storage/local-workflow'
 import { parseAiJson } from '@/utils/ai-json'
+import { getWritingStorage } from '@/storage'
+import { workflowResumeText } from '@/utils/workflow-local-draft'
+import { countWords } from '@/utils/word-count'
 import { requestLocalChatCompletion } from '@/utils/local-ai-client'
 import { createLocalBookFromRun } from '@/utils/local-workflow-book'
 import {
@@ -156,6 +159,21 @@ export const resumeLocalWorkflowTask = async (data: { taskId: number }) => {
   }
   if (findLiveLocalTaskForRun(Number(task.runId))) {
     throw new Error('该工作流已有生成任务在运行')
+  }
+  // 恢复前重读本地稿。暂停期间的修改（含清空）必须替换旧断点。
+  const checkpoint = task.checkpoint
+  if (checkpoint?.chapterId) {
+    const chapterId = Number(checkpoint.chapterId)
+    const draft = await getWritingStorage().getChapterByIdentity(LOCAL_USER_ID, String(task.bookId), chapterId)
+    const text = workflowResumeText(draft, String(checkpoint.contentText || ''))
+    const words = countWords(text)
+    task.checkpoint = {
+      ...checkpoint,
+      contentText: text,
+      payload: { ...(checkpoint.payload || {}), seq: Number(checkpoint.payload?.seq || 0) + 1 },
+    }
+    task.totalGeneratedWords = Math.max(0, Number(task.totalGeneratedWords || 0) - Number(task.generatedWords || 0)) + words
+    task.generatedWords = words
   }
   const next: WorkflowTask = {
     ...task,

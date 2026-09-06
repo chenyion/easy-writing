@@ -65,8 +65,9 @@ const withStore = async <T>(
     return await new Promise<T>((resolve, reject) => {
       const tx = db.transaction(STORE_NAME, mode)
       const request = run(tx.objectStore(STORE_NAME))
-      request.onsuccess = () => resolve(request.result)
-      request.onerror = () => reject(request.error)
+      tx.oncomplete = () => resolve(request.result)
+      tx.onerror = () => reject(tx.error || request.error)
+      tx.onabort = () => reject(tx.error || new Error('工作流数据保存失败'))
     })
   } finally {
     db.close()
@@ -197,14 +198,33 @@ export const writeLocalWorkflowTask = async (task: WorkflowStepTask | WorkflowTa
 }
 
 /**
- * 读任务并做孤儿修复：任务停在 queued/running 但引擎里没有对应的活循环，
- * 说明上次应用中途关闭——如实翻成 interrupted（有断点则可继续生成）。
+ * 读取时修复旧整书任务的停驻能力标记；queued/running 没有活循环时，
+ * 视为上次应用关闭中断，转为 interrupted 并保留断点。
  */
 export const readRepairedLocalTask = async (taskId: number): Promise<WorkflowTask | null> => {
   const task = await readValue<WorkflowTask>(taskKey(taskId))
   if (!task) return null
   const status = String(task.status || '')
-  if (!['queued', 'running'].includes(status) || isLiveLocalTask(taskId)) return task
+  if (isLiveLocalTask(taskId)) return task
+  // 旧整书任务可能残留操作锁或能力标记；停驻状态本身决定是否可恢复。
+  if (task.bizType === 'book_generate' && ['paused', 'interrupted', 'failed'].includes(status)) {
+    if (
+      task.canResume === true && task.canPause === false &&
+      task.canCancel === true && task.requestedAction == null
+    ) {
+      return task
+    }
+    const repaired: WorkflowTask = {
+      ...task,
+      requestedAction: null,
+      canPause: false,
+      canResume: true,
+      canCancel: true,
+    }
+    await writeValue(taskKey(taskId), repaired)
+    return repaired
+  }
+  if (!['queued', 'running'].includes(status)) return task
   const repaired: WorkflowTask = {
     ...task,
     status: 'interrupted',

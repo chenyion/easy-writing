@@ -2671,6 +2671,9 @@
 
   dd {
     margin: 0;
+    min-width: 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
     color: var(--workflow-muted);
     font-size: 13px;
     line-height: 1.6;
@@ -2678,6 +2681,24 @@
     &.is-next {
       color: var(--workflow-ink);
     }
+  }
+}
+
+.adjust-drawer-change__toggle {
+  display: block;
+  margin: 10px 0 0 auto;
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  color: var(--workflow-accent);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+
+  &:hover { text-decoration: underline; }
+  &:focus-visible {
+    outline: 2px solid var(--workflow-accent);
+    outline-offset: 3px;
   }
 }
 

@@ -95,13 +95,23 @@
               <dl>
                 <div>
                   <dt>原内容</dt>
-                  <dd>{{ change.before || '（空）' }}</dd>
+                  <dd>{{ displayChangeText(change.before, change.key) }}</dd>
                 </div>
                 <div>
                   <dt>候选内容</dt>
-                  <dd class="is-next">{{ change.after || '（空）' }}</dd>
+                  <dd class="is-next">{{ displayChangeText(change.after, change.key) }}</dd>
                 </div>
               </dl>
+              <button
+                v-if="change.before.length > PREVIEW_LENGTH || change.after.length > PREVIEW_LENGTH"
+                type="button"
+                class="adjust-drawer-change__toggle"
+                :aria-expanded="expandedKeys.has(change.key)"
+                :aria-label="`${expandedKeys.has(change.key) ? '收起' : '展开全文'}：${change.label}`"
+                @click="toggleChange(change.key)"
+              >
+                {{ expandedKeys.has(change.key) ? '收起' : '展开全文' }}
+              </button>
             </article>
 
             <p
@@ -173,7 +183,7 @@
  * 底部三按钮。真正不同的只有「填要求」那段表单——范围选项、保留项、目标选择器，
  * 所以那部分交给 form 插槽，由各步骤自己提供并自行组装请求。
  */
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type {
   WorkflowAdjustCandidateView,
   WorkflowAdjustPhase,
@@ -217,6 +227,20 @@ defineEmits<{
   (event: 'regenerate'): void
   (event: 'apply'): void
 }>()
+
+const PREVIEW_LENGTH = 60
+const expandedKeys = ref(new Set<string>())
+const toggleChange = (key: string) => {
+  if (expandedKeys.value.has(key)) expandedKeys.value.delete(key)
+  else expandedKeys.value.add(key)
+}
+const displayChangeText = (text: string, key: string) => {
+  if (!text) return '（空）'
+  return !expandedKeys.value.has(key) && text.length > PREVIEW_LENGTH
+    ? `${text.slice(0, PREVIEW_LENGTH)}…`
+    : text
+}
+watch(() => props.candidate, () => expandedKeys.value.clear())
 
 const clampedPercent = computed(() => Math.max(0, Math.min(100, Math.round(props.percent))))
 

@@ -222,11 +222,6 @@ const SETTING_PRESERVE_LABELS: Record<string, string> = {
   worldRules: '世界规则',
 }
 
-const clip = (value: unknown, max = 60) => {
-  const text = asText(value)
-  return text.length > max ? `${text.slice(0, max)}…` : text
-}
-
 const selectedTitleOf = (outline: JsonRecord) => {
   const options = Array.isArray(outline.titleOptions) ? outline.titleOptions : []
   const selected = options.find((item: JsonRecord) => String(item?.id) === String(outline.selectedTitleId))
@@ -236,7 +231,7 @@ const selectedTitleOf = (outline: JsonRecord) => {
 const diffOutlineChanges = (before: JsonRecord, after: JsonRecord) => {
   const changes: Array<{ key: string; label: string; before: string; after: string }> = []
   const push = (key: string, label: string, prev: string, next: string) => {
-    if (prev !== next) changes.push({ key, label, before: clip(prev), after: clip(next) })
+    if (prev !== next) changes.push({ key, label, before: prev, after: next })
   }
   push('title', '书名', selectedTitleOf(before), selectedTitleOf(after))
   push('intro', '简介', asText(before.intro), asText(after.intro))
@@ -247,19 +242,22 @@ const diffOutlineChanges = (before: JsonRecord, after: JsonRecord) => {
     (Array.isArray(before.worldItems) ? before.worldItems : []).map(asText).join('；'),
     (Array.isArray(after.worldItems) ? after.worldItems : []).map(asText).join('；')
   )
-  const volumeBrief = (outline: JsonRecord) =>
-    (Array.isArray(outline.volumes) ? outline.volumes : [])
-      .map((volume: JsonRecord) => asText(volume?.title))
-      .filter(Boolean)
-      .join('、')
-  push('volumes', '分卷规划', volumeBrief(before), volumeBrief(after))
+  const beforeVolumes: JsonRecord[] = Array.isArray(before.volumes) ? before.volumes : []
+  const afterVolumes: JsonRecord[] = Array.isArray(after.volumes) ? after.volumes : []
+  const volumeContent = (volume?: JsonRecord) => volume
+    ? [asText(volume.title), asText(volume.summary)].filter(Boolean).join('\n\n')
+    : ''
+  for (let index = 0; index < Math.max(beforeVolumes.length, afterVolumes.length); index += 1) {
+    push(`volumes:${index}`, `第${index + 1}卷 · 卷名与卷纲`,
+      volumeContent(beforeVolumes[index]), volumeContent(afterVolumes[index]))
+  }
   return changes
 }
 
 const diffSettingChanges = (before: JsonRecord, after: JsonRecord) => {
   const changes: Array<{ key: string; label: string; before: string; after: string }> = []
   const push = (key: string, label: string, prev: string, next: string) => {
-    if (prev !== next) changes.push({ key, label, before: clip(prev), after: clip(next) })
+    if (prev !== next) changes.push({ key, label, before: prev, after: next })
   }
   const names = (setting: JsonRecord, field: string, nameField: string) =>
     (Array.isArray(setting[field]) ? setting[field] : [])

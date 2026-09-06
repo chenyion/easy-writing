@@ -227,8 +227,37 @@ const acceptTxtHeading = (match: RegExpMatchArray, lastNo: number): { pass: bool
   return { pass: true, no }
 }
 
+/** 优先按 BOM 解码；无 BOM 时先验证 UTF-8，再兼容 GBK/GB18030 中文文本。 */
+const readLocalTxtContent = async (file: File): Promise<string> => {
+  const bytes = new Uint8Array(await file.arrayBuffer())
+  let encoding: string | null = null
+  if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) encoding = 'utf-8'
+  else if (bytes[0] === 0xff && bytes[1] === 0xfe) encoding = 'utf-16le'
+  else if (bytes[0] === 0xfe && bytes[1] === 0xff) encoding = 'utf-16be'
+
+  let text: string
+  try {
+    if (encoding) {
+      text = new TextDecoder(encoding, { fatal: true }).decode(bytes)
+    } else {
+      try {
+        text = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+      } catch {
+        text = new TextDecoder('gb18030', { fatal: true }).decode(bytes)
+      }
+    }
+  } catch {
+    throw new Error('无法正确读取 TXT 编码，请将原文件另存为 UTF-8 后重新导入')
+  }
+  // 拒绝带空字符的内容，避免未标记编码的 UTF-16 或二进制文件被当作正文保存。
+  if (text.includes('\0')) {
+    throw new Error('文件包含非文本字符，请将原文件另存为 UTF-8 格式的 TXT 后重新导入')
+  }
+  return text
+}
+
 export const parseLocalTxtBook = async (file: File): Promise<LocalParsedBook> => {
-  const text = await file.text()
+  const text = await readLocalTxtContent(file)
   const filenameTitle = file.name.replace(/\.[^.]+$/, '').trim() || '导入作品'
   const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n')
   const volumes: LocalParsedBook['volumes'] = []

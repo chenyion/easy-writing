@@ -231,6 +231,7 @@ import {
   cancelLocalWorkflowTask as cancelWorkflowTaskApi,
   generateLocalWorkflowBook as generateWorkflowBookApi,
   pauseLocalWorkflowTask as pauseWorkflowTaskApi,
+  resumeLocalWorkflowTask as resumeWorkflowTaskApi,
 } from '@/utils/local-workflow-control'
 
 const PAGE_SIZE = 10
@@ -427,16 +428,16 @@ const openBook = (item: WorkflowHistoryRecord) => {
   void router.push({ path: `/writing/${item.bookId}`, query: queryParams })
 }
 
-// 已有书籍但没有可恢复任务时，先创建新任务，再携带完整工作流身份进入自动生文页。
+// 已有任务先恢复；没有任务时创建新任务，再进入自动生文页。
 const continueWriting = async (item: WorkflowHistoryRecord) => {
   if (!item.bookId || actionId.value) return
-  if (item.activeTask?.id) {
-    openBook(item)
-    return
-  }
-
   actionId.value = item.runId
   try {
+    if (item.activeTask?.id) {
+      await resumeWorkflowTaskApi({ taskId: item.activeTask.id })
+      openBook(item)
+      return
+    }
     const { data } = await generateWorkflowBookApi({ runId: item.runId })
     if ('conflict' in data) {
       ElMessage.warning(data.message || '当前有自动生文任务正在运行')

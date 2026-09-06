@@ -42,5 +42,7 @@ coverage
 .eslintcache
 stats.html
 
+docs/design/
+
 # Local companion user data (never commit)
 /local-data/
